@@ -36,7 +36,35 @@ def song_key(q):
     return hashlib.sha1(q.strip().lower().encode()).hexdigest()[:16]
 
 
-def fetch_and_split(query, job, label):
+def grab(url, dest):
+    tmp = dest + ".dl"
+    with requests.get(url, headers={"User-Agent": "smash-bender/1.0"}, stream=True, timeout=120) as res:
+        res.raise_for_status()
+        with open(tmp, "wb") as fh:
+            for chunk in res.iter_content(1 << 16):
+                fh.write(chunk)
+    run(["ffmpeg", "-y", "-loglevel", "error", "-i", tmp, "-ar", str(SR), dest])
+    os.remove(tmp)
+
+
+def demucs(d, src, job, label):
+    voc = os.path.join(d, "vocals.wav")
+    inst = os.path.join(d, "instrumental.wav")
+    if os.path.exists(voc) and os.path.exists(inst):
+        return
+    set_state(job, progress="splitting " + label)
+    out = os.path.join(d, "sep")
+    run([PY, "-m", "demucs", "--two-stems", "vocals", "-n", "htdemucs",
+         "--segment", "7", "-j", "1", "-o", out, src])
+    shutil.move(os.path.join(out, "htdemucs", "song", "vocals.wav"), voc)
+    shutil.move(os.path.join(out, "htdemucs", "song", "no_vocals.wav"), inst)
+    shutil.rmtree(out, ignore_errors=True)
+
+
+def fetch_and_split(spec, job, label, need_inst):
+    if isinstance(spec, dict):
+        return fetch_urls(spec, job, label, need_inst)
+    query = spec
     d = os.path.join(DATA, "songs", song_key(query))
     os.makedirs(d, exist_ok=True)
     src = os.path.join(d, "song.wav")
@@ -50,22 +78,38 @@ def fetch_and_split(query, job, label):
         if os.path.exists(cookies):
             cmd += ["--cookies", cookies]
         run(cmd + [target])
-    voc = os.path.join(d, "vocals.wav")
-    inst = os.path.join(d, "instrumental.wav")
-    if not (os.path.exists(voc) and os.path.exists(inst)):
-        set_state(job, progress="splitting " + label)
-        out = os.path.join(d, "sep")
-        run([PY, "-m", "demucs", "--two-stems", "vocals", "-n", "htdemucs",
-             "--segment", "7", "-j", "1", "-o", out, src])
-        shutil.move(os.path.join(out, "htdemucs", "song", "vocals.wav"), voc)
-        shutil.move(os.path.join(out, "htdemucs", "song", "no_vocals.wav"), inst)
-        shutil.rmtree(out, ignore_errors=True)
+    demucs(d, src, job, label)
     title = ""
     tp = os.path.join(d, "title.txt")
     if os.path.exists(tp):
         lines = open(tp).read().strip().splitlines()
         title = lines[0] if lines else ""
     return d, title
+
+
+def fetch_urls(spec, job, label, need_inst):
+    d = os.path.join(DATA, "songs", song_key(json.dumps(spec, sort_keys=True)))
+    os.makedirs(d, exist_ok=True)
+    voc = os.path.join(d, "vocals.wav")
+    inst = os.path.join(d, "instrumental.wav")
+    set_state(job, progress="downloading " + label)
+    if spec.get("vocals_url") and not os.path.exists(voc):
+        grab(spec["vocals_url"], voc)
+    if spec.get("instrumental_url") and not os.path.exists(inst):
+        grab(spec["instrumental_url"], inst)
+    if spec.get("url") and not (os.path.exists(inst) and os.path.exists(voc)):
+        src = os.path.join(d, "song.wav")
+        if not os.path.exists(src):
+            grab(spec["url"], src)
+        keep = voc + ".keep"
+        if os.path.exists(voc):
+            shutil.move(voc, keep)
+        demucs(d, src, job, label)
+        if os.path.exists(keep):
+            shutil.move(keep, voc)
+    if not os.path.exists(voc) or (need_inst and not os.path.exists(inst)):
+        raise RuntimeError(label + ": missing vocals or instrumental source")
+    return d, spec.get("title", "")
 
 
 def find_notes(path):
@@ -190,8 +234,13 @@ def run_job(job):
         d = job_dir(job)
         meta = json.load(open(os.path.join(d, "meta.json")))
         set_state(job, status="working")
-        dir1, t1 = fetch_and_split(meta["song1"], job, "song one")
-        dir2, t2 = fetch_and_split(meta["song2"], job, "song two")
+        if meta.get("ccmixter"):
+            import ccmixter
+            set_state(job, progress="picking songs on ccmixter")
+            picked = ccmixter.pick(meta["ccmixter"])
+            meta.update(picked)
+        dir1, t1 = fetch_and_split(meta["song1"], job, "song one", True)
+        dir2, t2 = fetch_and_split(meta["song2"], job, "song two", False)
         meta.update({"dir1": dir1, "dir2": dir2, "title1": t1, "title2": t2})
         json.dump(meta, open(os.path.join(d, "meta.json"), "w"))
         set_state(job, title1=t1, title2=t2, progress="reading melody of song one")

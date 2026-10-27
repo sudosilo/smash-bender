@@ -28,11 +28,12 @@ def health():
 async def create(req: Request):
     check(req)
     body = await req.json()
-    if not body.get("song1") or not body.get("song2"):
-        raise HTTPException(400, "song1 and song2 required")
+    if not body.get("ccmixter") and not (body.get("song1") and body.get("song2")):
+        raise HTTPException(400, "song1 and song2, or ccmixter, required")
     job = uuid.uuid4().hex[:10]
     d = pipeline.job_dir(job)
-    meta = {"song1": body["song1"], "song2": body["song2"], "voice_id": body.get("voice_id", "")}
+    meta = {"song1": body.get("song1"), "song2": body.get("song2"),
+            "ccmixter": body.get("ccmixter", ""), "voice_id": body.get("voice_id", "")}
     json.dump(meta, open(os.path.join(d, "meta.json"), "w"))
     pipeline.set_state(job, status="queued", progress="queued", rev=0)
     q.enqueue(pipeline.run_job, job, job_timeout=3600)
