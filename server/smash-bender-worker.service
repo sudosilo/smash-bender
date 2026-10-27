@@ -1,0 +1,12 @@
+[Unit]
+Description=Smash Bender Worker
+After=network.target redis-server.service
+
+[Service]
+WorkingDirectory=/opt/smash-bender/repo/server
+EnvironmentFile=-/opt/smash-bender/.env
+ExecStart=/opt/smash-bender/venv/bin/rq worker smash-bender
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

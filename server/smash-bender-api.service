@@ -1,0 +1,12 @@
+[Unit]
+Description=Smash Bender API
+After=network.target redis-server.service
+
+[Service]
+WorkingDirectory=/opt/smash-bender/repo/server
+EnvironmentFile=-/opt/smash-bender/.env
+ExecStart=/opt/smash-bender/venv/bin/uvicorn app:app --host 127.0.0.1 --port 8110
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
