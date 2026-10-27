@@ -7,7 +7,8 @@ http.client._MAXHEADERS = 1000
 
 API = "https://ccmixter.org/api/query"
 AUDIO = (".mp3", ".flac", ".wav", ".ogg")
-UA = {"User-Agent": "smash-bender/1.0"}
+UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+      "Referer": "https://ccmixter.org/"}
 
 
 def query(params):
@@ -47,6 +48,16 @@ def remixes_of(upload_id):
     return [u for u in rows if audio_url(u) and "acappella" not in tags_of(u)]
 
 
+def reachable(link):
+    try:
+        res = requests.get(link, headers=dict(UA, Range="bytes=0-2047"), stream=True, timeout=30)
+        ok = res.status_code in (200, 206)
+        res.close()
+        return ok
+    except requests.RequestException:
+        return False
+
+
 def label(u):
     return "%s by %s" % (u.get("upload_name", "?"), u.get("user_name", "?"))
 
@@ -56,14 +67,26 @@ def pick(bpm_tag):
     if len(pells) < 2:
         raise RuntimeError("ccmixter: fewer than two a cappellas tagged " + bpm_tag)
     random.shuffle(pells)
-    for a in pells[:15]:
-        mixes = remixes_of(a["upload_id"])
-        if not mixes:
+    good = {}
+
+    def usable(u):
+        k = u["upload_id"]
+        if k not in good:
+            good[k] = reachable(audio_url(u))
+        return good[k]
+
+    for a in pells[:20]:
+        if not usable(a):
             continue
-        b = next(p for p in pells if p["upload_id"] != a["upload_id"])
+        mix = next((m for m in remixes_of(a["upload_id"])[:5] if usable(m)), None)
+        if not mix:
+            continue
+        b = next((p for p in pells if p["upload_id"] != a["upload_id"] and usable(p)), None)
+        if not b:
+            continue
         return {
-            "song1": {"url": audio_url(mixes[0]), "vocals_url": audio_url(a),
-                      "title": label(mixes[0])},
+            "song1": {"url": audio_url(mix), "vocals_url": audio_url(a),
+                      "title": label(mix)},
             "song2": {"vocals_url": audio_url(b), "title": label(b)},
         }
     raise RuntimeError("ccmixter: no a cappella at " + bpm_tag + " with a remix found")

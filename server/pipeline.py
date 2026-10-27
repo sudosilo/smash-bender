@@ -36,9 +36,13 @@ def song_key(q):
     return hashlib.sha1(q.strip().lower().encode()).hexdigest()[:16]
 
 
+BROWSER = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+           "Accept": "audio/*,*/*;q=0.8", "Referer": "https://ccmixter.org/"}
+
+
 def grab(url, dest):
     tmp = dest + ".dl"
-    with requests.get(url, headers={"User-Agent": "smash-bender/1.0"}, stream=True, timeout=120) as res:
+    with requests.get(url, headers=BROWSER, stream=True, timeout=120) as res:
         res.raise_for_status()
         with open(tmp, "wb") as fh:
             for chunk in res.iter_content(1 << 16):
