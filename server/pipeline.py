@@ -24,6 +24,14 @@ def job_dir(job):
     return d
 
 
+def run(cmd):
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if p.returncode != 0:
+        tail = (p.stderr or p.stdout or "").strip().splitlines()[-4:]
+        raise RuntimeError(os.path.basename(cmd[2] if len(cmd) > 2 else cmd[0]) + ": " + " | ".join(tail))
+    return p
+
+
 def song_key(q):
     return hashlib.sha1(q.strip().lower().encode()).hexdigest()[:16]
 
@@ -35,16 +43,20 @@ def fetch_and_split(query, job, label):
     if not os.path.exists(src):
         set_state(job, progress="downloading " + label)
         target = query if query.startswith("http") else "ytsearch1:" + query
-        subprocess.run([PY, "-m", "yt_dlp", "--no-playlist", "-x", "--audio-format", "wav",
-                        "--print-to-file", "%(title)s", os.path.join(d, "title.txt"),
-                        "-o", os.path.join(d, "song.%(ext)s"), target], check=True)
+        cmd = [PY, "-m", "yt_dlp", "--no-playlist", "-x", "--audio-format", "wav",
+               "--print-to-file", "%(title)s", os.path.join(d, "title.txt"),
+               "-o", os.path.join(d, "song.%(ext)s")]
+        cookies = os.path.join(os.path.dirname(DATA), "cookies.txt")
+        if os.path.exists(cookies):
+            cmd += ["--cookies", cookies]
+        run(cmd + [target])
     voc = os.path.join(d, "vocals.wav")
     inst = os.path.join(d, "instrumental.wav")
     if not (os.path.exists(voc) and os.path.exists(inst)):
         set_state(job, progress="splitting " + label)
         out = os.path.join(d, "sep")
-        subprocess.run([PY, "-m", "demucs", "--two-stems", "vocals", "-n", "htdemucs",
-                        "--segment", "7", "-j", "1", "-o", out, src], check=True)
+        run([PY, "-m", "demucs", "--two-stems", "vocals", "-n", "htdemucs",
+             "--segment", "7", "-j", "1", "-o", out, src])
         shutil.move(os.path.join(out, "htdemucs", "song", "vocals.wav"), voc)
         shutil.move(os.path.join(out, "htdemucs", "song", "no_vocals.wav"), inst)
         shutil.rmtree(out, ignore_errors=True)
