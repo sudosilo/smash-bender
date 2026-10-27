@@ -1,5 +1,9 @@
 import re, json, random
+import http.client
 import requests
+
+http.client._MAXLINE = 1 << 24
+http.client._MAXHEADERS = 1000
 
 API = "https://ccmixter.org/api/query"
 AUDIO = (".mp3", ".flac", ".wav", ".ogg")
