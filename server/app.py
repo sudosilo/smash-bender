@@ -33,7 +33,8 @@ async def create(req: Request):
     job = uuid.uuid4().hex[:10]
     d = pipeline.job_dir(job)
     meta = {"song1": body.get("song1"), "song2": body.get("song2"),
-            "ccmixter": body.get("ccmixter", ""), "voice_id": body.get("voice_id", "")}
+            "ccmixter": body.get("ccmixter", ""), "seconds": int(body.get("seconds", 30) or 0),
+            "voice_id": body.get("voice_id") or os.environ.get("ELEVENLABS_VOICE_ID", "")}
     json.dump(meta, open(os.path.join(d, "meta.json"), "w"))
     pipeline.set_state(job, status="queued", progress="queued", rev=0)
     q.enqueue(pipeline.run_job, job, job_timeout=3600)

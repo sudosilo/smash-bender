@@ -85,8 +85,7 @@ def pick(bpm_tag):
         if not b:
             continue
         return {
-            "song1": {"url": audio_url(mix), "vocals_url": audio_url(a),
-                      "title": label(mix)},
+            "song1": {"url": audio_url(mix), "title": label(mix)},
             "song2": {"vocals_url": audio_url(b), "title": label(b)},
         }
     raise RuntimeError("ccmixter: no a cappella at " + bpm_tag + " with a remix found")

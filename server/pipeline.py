@@ -40,15 +40,20 @@ BROWSER = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/201001
            "Accept": "audio/*,*/*;q=0.8", "Referer": "https://ccmixter.org/"}
 
 
-def grab(url, dest):
+def grab(url, dest, seconds=0):
     tmp = dest + ".dl"
     with requests.get(url, headers=BROWSER, stream=True, timeout=120) as res:
         res.raise_for_status()
         with open(tmp, "wb") as fh:
             for chunk in res.iter_content(1 << 16):
                 fh.write(chunk)
-    run(["ffmpeg", "-y", "-loglevel", "error", "-i", tmp, "-ar", str(SR), dest])
+    trim(tmp, dest, seconds)
     os.remove(tmp)
+
+
+def trim(src, dest, seconds=0):
+    cut = ["-t", str(seconds)] if seconds and seconds > 0 else []
+    run(["ffmpeg", "-y", "-loglevel", "error", "-i", src] + cut + ["-ar", str(SR), dest])
 
 
 def demucs(d, src, job, label):
@@ -65,11 +70,11 @@ def demucs(d, src, job, label):
     shutil.rmtree(out, ignore_errors=True)
 
 
-def fetch_and_split(spec, job, label, need_inst):
+def fetch_and_split(spec, job, label, need_inst, seconds=0):
     if isinstance(spec, dict):
-        return fetch_urls(spec, job, label, need_inst)
+        return fetch_urls(spec, job, label, need_inst, seconds)
     query = spec
-    d = os.path.join(DATA, "songs", song_key(query))
+    d = os.path.join(DATA, "songs", song_key(query + "|" + str(seconds)))
     os.makedirs(d, exist_ok=True)
     src = os.path.join(d, "song.wav")
     if not os.path.exists(src):
@@ -77,11 +82,14 @@ def fetch_and_split(spec, job, label, need_inst):
         target = query if query.startswith("http") else "ytsearch1:" + query
         cmd = [PY, "-m", "yt_dlp", "--no-playlist", "-x", "--audio-format", "wav",
                "--print-to-file", "%(title)s", os.path.join(d, "title.txt"),
-               "-o", os.path.join(d, "song.%(ext)s")]
+               "-o", os.path.join(d, "full.%(ext)s")]
         cookies = os.path.join(os.path.dirname(DATA), "cookies.txt")
         if os.path.exists(cookies):
             cmd += ["--cookies", cookies]
         run(cmd + [target])
+        full = os.path.join(d, "full.wav")
+        trim(full, src, seconds)
+        os.remove(full)
     demucs(d, src, job, label)
     title = ""
     tp = os.path.join(d, "title.txt")
@@ -91,26 +99,23 @@ def fetch_and_split(spec, job, label, need_inst):
     return d, title
 
 
-def fetch_urls(spec, job, label, need_inst):
-    d = os.path.join(DATA, "songs", song_key(json.dumps(spec, sort_keys=True)))
+def fetch_urls(spec, job, label, need_inst, seconds=0):
+    key = json.dumps(spec, sort_keys=True) + "|" + str(seconds)
+    d = os.path.join(DATA, "songs", song_key(key))
     os.makedirs(d, exist_ok=True)
     voc = os.path.join(d, "vocals.wav")
     inst = os.path.join(d, "instrumental.wav")
     set_state(job, progress="downloading " + label)
-    if spec.get("vocals_url") and not os.path.exists(voc):
-        grab(spec["vocals_url"], voc)
-    if spec.get("instrumental_url") and not os.path.exists(inst):
-        grab(spec["instrumental_url"], inst)
-    if spec.get("url") and not (os.path.exists(inst) and os.path.exists(voc)):
+    if spec.get("url"):
         src = os.path.join(d, "song.wav")
         if not os.path.exists(src):
-            grab(spec["url"], src)
-        keep = voc + ".keep"
-        if os.path.exists(voc):
-            shutil.move(voc, keep)
+            grab(spec["url"], src, seconds)
         demucs(d, src, job, label)
-        if os.path.exists(keep):
-            shutil.move(keep, voc)
+    else:
+        if spec.get("vocals_url") and not os.path.exists(voc):
+            grab(spec["vocals_url"], voc, seconds)
+        if spec.get("instrumental_url") and not os.path.exists(inst):
+            grab(spec["instrumental_url"], inst, seconds)
     if not os.path.exists(voc) or (need_inst and not os.path.exists(inst)):
         raise RuntimeError(label + ": missing vocals or instrumental source")
     return d, spec.get("title", "")
@@ -123,19 +128,35 @@ def find_notes(path):
     gate = max(1e-4, float(np.percentile(rms, 60)) * 0.25)
     midi = librosa.hz_to_midi(np.where(np.isnan(f0), 1.0, f0))
     ft = HOP / ASR
-    notes, cur = [], None
+    raw, cur = [], None
     for i in range(len(f0)):
         ok = bool(voiced[i]) and not np.isnan(f0[i]) and rms[min(i, len(rms) - 1)] > gate
         if ok and cur and abs(midi[i] - np.median(cur["m"])) < 0.8:
             cur["m"].append(midi[i]); cur["e"] = i
             continue
-        if cur and (cur["e"] - cur["s"] + 1) * ft >= 0.06:
-            notes.append(cur)
+        if cur:
+            raw.append(cur)
         cur = {"s": i, "e": i, "m": [midi[i]]} if ok else None
-    if cur and (cur["e"] - cur["s"] + 1) * ft >= 0.06:
-        notes.append(cur)
-    return [{"start": round(n["s"] * ft, 4), "end": round((n["e"] + 1) * ft, 4),
-             "midi": round(float(np.median(n["m"])), 2)} for n in notes]
+    if cur:
+        raw.append(cur)
+    merged = []
+    for n in raw:
+        if merged:
+            p = merged[-1]
+            gap = (n["s"] - p["e"]) * ft
+            if gap < 0.06 and abs(np.median(n["m"]) - np.median(p["m"])) < 0.6:
+                p["m"] += n["m"]; p["e"] = n["e"]
+                continue
+        merged.append(n)
+    out = []
+    for n in merged:
+        if (n["e"] - n["s"] + 1) * ft < 0.1:
+            continue
+        seg = rms[n["s"]:n["e"] + 1]
+        out.append({"start": round(n["s"] * ft, 4), "end": round((n["e"] + 1) * ft, 4),
+                    "midi": round(float(np.median(n["m"])), 2),
+                    "level": round(float(np.sqrt(np.mean(seg ** 2))) if len(seg) else 0.0, 5)})
+    return out
 
 
 def build_plan(target_notes, source_notes):
@@ -146,6 +167,7 @@ def build_plan(target_notes, source_notes):
     for i, t in enumerate(target_notes):
         s = source_notes[min(m - 1, i * m // n)]
         items.append({"i": i, "start": t["start"], "end": t["end"], "midi": t["midi"],
+                      "level": t.get("level", 0),
                       "src_start": s["start"], "src_end": s["end"], "src_midi": s["midi"],
                       "shift_ms": 0, "semis": 0, "trim_start_ms": 0, "trim_end_ms": 0,
                       "mute": False})
@@ -154,7 +176,7 @@ def build_plan(target_notes, source_notes):
 
 def bend(vocal, items, total_len):
     out = np.zeros(total_len, dtype=np.float32)
-    fade = int(0.006 * SR)
+    fade = int(0.012 * SR)
     for it in items:
         if it.get("mute"):
             continue
@@ -170,6 +192,10 @@ def bend(vocal, items, total_len):
         steps = float(np.clip(it["midi"] - it["src_midi"] + it.get("semis", 0), -24, 24))
         piece = pyrb.time_stretch(seg, SR, rate, rbargs={"--pitch": "%.3f" % steps})
         piece = piece.astype(np.float32)
+        have = float(np.sqrt(np.mean(piece ** 2))) if len(piece) else 0.0
+        want_level = float(it.get("level") or 0)
+        if have > 1e-5 and want_level > 0:
+            piece *= float(np.clip(want_level / have, 0.1, 10.0))
         f = min(fade, len(piece) // 2)
         if f > 0:
             ramp = np.linspace(0, 1, f, dtype=np.float32)
@@ -211,7 +237,7 @@ def render(job):
     bent_path = os.path.join(d, "bent_vocal.wav")
     sf.write(bent_path, bent, SR)
     final = bent
-    voice = meta.get("voice_id", "")
+    voice = meta.get("voice_id") or os.environ.get("ELEVENLABS_VOICE_ID", "")
     if voice and os.environ.get("ELEVENLABS_API_KEY"):
         set_state(job, progress="singing with elevenlabs")
         audio = eleven(bent_path, voice)
@@ -221,7 +247,12 @@ def render(job):
         final = np.zeros_like(bent)
         final[:min(len(sung), len(final))] = sung[:len(final)]
     set_state(job, progress="mixing")
-    mix = inst * 0.8 + final[None, :] * 1.0
+    inst_level = float(np.sqrt(np.mean(inst ** 2))) or 1e-3
+    loud = final[np.abs(final) > 1e-4]
+    voc_level = float(np.sqrt(np.mean(loud ** 2))) if len(loud) else 0.0
+    if voc_level > 1e-5:
+        final = final * (inst_level * 1.4 / voc_level)
+    mix = inst + final[None, :]
     peak = float(np.max(np.abs(mix))) or 1.0
     mix = mix / max(peak, 1.0) * 0.98
     wav = os.path.join(d, "mix.wav")
@@ -243,8 +274,9 @@ def run_job(job):
             set_state(job, progress="picking songs on ccmixter")
             picked = ccmixter.pick(meta["ccmixter"])
             meta.update(picked)
-        dir1, t1 = fetch_and_split(meta["song1"], job, "song one", True)
-        dir2, t2 = fetch_and_split(meta["song2"], job, "song two", False)
+        secs = int(meta.get("seconds", 30) or 0)
+        dir1, t1 = fetch_and_split(meta["song1"], job, "song one", True, secs)
+        dir2, t2 = fetch_and_split(meta["song2"], job, "song two", False, secs)
         meta.update({"dir1": dir1, "dir2": dir2, "title1": t1, "title2": t2})
         json.dump(meta, open(os.path.join(d, "meta.json"), "w"))
         set_state(job, title1=t1, title2=t2, progress="reading melody of song one")
