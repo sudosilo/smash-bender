@@ -1,12 +1,14 @@
 import os, json, uuid
 import redis
 from rq import Queue
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import time
 import pipeline
 import stage2
+import runner
+import re
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -108,7 +110,7 @@ def load_ratings():
 
 
 @app.get("/api/experiments")
-def experiments():
+def experiments(project: str = ""):
     batches = {}
     if os.path.isdir(EXP):
         for fn in os.listdir(EXP):
@@ -118,6 +120,8 @@ def experiments():
                 try:
                     rec = json.loads(line)
                 except ValueError:
+                    continue
+                if project and rec.get("experiment", fn[:-6]) != project:
                     continue
                 key = rec.get("experiment", fn[:-6]) + "|" + rec.get("batch", rec.get("time", "")[:16])
                 batches.setdefault(key, []).append(rec)
@@ -174,7 +178,7 @@ async def send_stage2(req: Request):
 
 
 @app.get("/api/stage2")
-def list_stage2():
+def list_stage2(project: str = ""):
     batches = {}
     if os.path.isdir(EXP):
         for fn in os.listdir(EXP):
@@ -184,6 +188,8 @@ def list_stage2():
                 try:
                     rec = json.loads(line)
                 except ValueError:
+                    continue
+                if project and rec.get("experiment") != project:
                     continue
                 key = "s2|" + rec.get("experiment", "") + "|" + rec.get("batch", "")
                 batches.setdefault(key, []).append(rec)
@@ -206,5 +212,76 @@ def list_stage2():
     for k in r.scan_iter("sb:stage2:*"):
         h = r.hgetall(k)
         if h.get("status") in ("queued", "working", "error"):
-            pending.append(h)
+            name = h.get("key", "").split("|")[-2] if h.get("key", "").startswith("s2|") else h.get("key", "").split("|")[0]
+            if not project or name == project:
+                pending.append(h)
     return {"sets": out, "pending": pending}
+
+
+PROJECTS = os.path.join(EXP, "projects.json")
+
+
+def load_projects():
+    try:
+        return json.load(open(PROJECTS))
+    except (OSError, ValueError):
+        return {}
+
+
+@app.get("/api/projects")
+def projects():
+    known = load_projects()
+    if os.path.isdir(EXP):
+        for fn in os.listdir(EXP):
+            if fn.endswith(".jsonl") and not fn.endswith(".stage2.jsonl"):
+                slug = fn[:-6]
+                known.setdefault(slug, {"name": slug, "created": time.strftime(
+                    "%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(os.path.join(EXP, fn))))})
+    return sorted([dict(v, slug=k) for k, v in known.items()], key=lambda p: p.get("created", ""), reverse=True)
+
+
+@app.post("/api/projects")
+async def new_project(req: Request):
+    body = await req.json()
+    name = (body.get("name") or "").strip()
+    slug = re.sub(r"[^a-z0-9]", "", name.lower())[:40]
+    if not slug:
+        raise HTTPException(400, "give the project a name with letters or numbers")
+    known = load_projects()
+    if slug in known:
+        raise HTTPException(409, "a project with that name already exists")
+    known[slug] = {"name": name, "created": time.strftime("%Y-%m-%d %H:%M")}
+    os.makedirs(EXP, exist_ok=True)
+    json.dump(known, open(PROJECTS, "w"))
+    return {"slug": slug}
+
+
+@app.post("/api/run")
+async def start_run(project: str = Form(...), song_one: str = Form(""), song_two: str = Form(""),
+                    seconds: int = Form(45), instrumental: UploadFile = File(...), acapella: UploadFile = File(...)):
+    slug = re.sub(r"[^a-z0-9]", "", project.lower())
+    if not slug:
+        raise HTTPException(400, "pick a project first")
+    seconds = max(10, min(240, int(seconds or 45)))
+    inbox = os.path.join(pipeline.DATA, "inbox")
+    os.makedirs(inbox, exist_ok=True)
+    stamp = time.strftime("%m%d%H%M%S")
+    names = []
+    for up, part in ((instrumental, "music"), (acapella, "voice")):
+        ext = re.sub(r"[^a-z0-9]", "", os.path.splitext(up.filename or "")[1].lower())[:5] or "audio"
+        fname = "%s_%s_%s.%s" % (slug, part, stamp, ext)
+        with open(os.path.join(inbox, fname), "wb") as fh:
+            while True:
+                chunk = await up.read(1 << 20)
+                if not chunk:
+                    break
+                fh.write(chunk)
+        names.append(fname)
+    job_id = uuid.uuid4().hex[:8]
+    r.hset("sb:stage2:" + job_id, mapping={"status": "queued", "progress": "waiting", "key": slug + "|new",
+                                            "run": "0", "tool": "experiment", "tool_name": "New experiment",
+                                            "stage": "1", "time": time.strftime("%Y-%m-%d %H:%M")})
+    r.expire("sb:stage2:" + job_id, 86400)
+    q.enqueue(runner.run_experiment, job_id, names[0], names[1], slug, seconds,
+              song_one.strip() or names[0], song_two.strip() or names[1], job_timeout=3600)
+    return {"job": job_id}
