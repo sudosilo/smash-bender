@@ -54,6 +54,17 @@ header p { margin: 0; color: var(--muted); max-width: 60ch; }
 .seek { width: 100%; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
 .seek b { display: block; height: 100%; width: 0; background: var(--cobalt); }
 .empty, .err { margin-top: 24px; color: var(--muted); }
+.tabs { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+.tabs button { all: unset; cursor: pointer; padding: 8px 14px; border-radius: 999px; border: 2px solid var(--line);
+  background: var(--panel); font: 500 0.95rem/1.2 var(--head); }
+.tabs button[aria-selected="true"] { border-color: var(--ink); background: var(--ink); color: #fff; }
+.tabs button:focus-visible { outline: 3px solid var(--cobalt); outline-offset: 2px; }
+.send { all: unset; cursor: pointer; text-align: center; font-size: 0.82rem; font-weight: 700; color: var(--cobalt);
+  border: 2px solid var(--cobalt); border-radius: 8px; padding: 6px 4px; }
+.send:focus-visible { outline: 3px solid var(--cobalt); outline-offset: 2px; }
+.send[disabled] { color: var(--muted); border-color: var(--line); cursor: default; }
+.from { color: var(--muted); font-size: 0.9rem; margin: -8px 0 12px; }
+.pending { background: #fff8ec; border: 1px solid #f0d9b5; border-radius: 12px; padding: 10px 14px; margin-top: 16px; font-size: 0.9rem; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
@@ -62,6 +73,10 @@ header p { margin: 0; color: var(--muted); max-width: 60ch; }
   <header>
     <h1>Sample log</h1>
     <p>Every test run, newest first. Tap a lettered pad to play it, rate it, and watch the trend to see if changes help or hurt.</p>
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tab1" aria-selected="true">Stage one: placing the voice</button>
+      <button role="tab" id="tab2" aria-selected="false">Stage two: ElevenLabs</button>
+    </div>
   </header>
   <section class="trend" aria-label="Progress over time">
     <h2>Best result per run set</h2>
@@ -95,13 +110,12 @@ function drawTrend(batches) {
   note.textContent = `Latest best ${pct(pts[pts.length - 1])}, ${d >= 0 ? "up" : "down"} ${Math.abs(Math.round(d))} point${Math.abs(Math.round(d)) === 1 ? "" : "s"} from the set before.`;
 }
 
-function render(batches) {
-  const list = document.getElementById("list");
-  drawTrend(batches);
-  if (!batches.length) { list.innerHTML = '<p class="empty">No runs yet. Start an experiment on the server and it shows up here.</p>'; return; }
-  list.innerHTML = batches.map(b => {
-    const best = Math.max(...b.samples.map(s => s.both_recognizable_pct || 0));
-    const pads = b.samples.map(s => `
+let stage = 1;
+let data1 = [], data2 = { sets: [], pending: [] };
+
+function padsHtml(b, sendable) {
+  const best = Math.max(...b.samples.map(s => s.both_recognizable_pct || 0));
+  return b.samples.map(s => `
       <div class="pad ${s.both_recognizable_pct === best ? "best" : ""}" data-audio="${esc(s.audio)}">
         <button class="hit" aria-label="Play sample ${esc(s.sample)}, ${esc(s.label)}">
           <span class="letter">${esc(s.sample)}</span><span class="what">${esc(s.label)}</span>
@@ -117,16 +131,38 @@ function render(batches) {
         <div class="stars" role="group" aria-label="Rate sample ${esc(s.sample)}">
           ${[1,2,3,4,5].map(n => `<button data-key="${esc(b.key)}" data-run="${s.run}" data-stars="${n}" class="${n <= (s.rating || 0) ? "on" : ""}" aria-label="${n} star${n > 1 ? "s" : ""}">\u2605</button>`).join("")}
         </div>
+        ${sendable ? `<button class="send" data-key="${esc(b.key)}" data-run="${s.run}">Send to ElevenLabs</button>` : ""}
       </div>`).join("");
-    return `<article class="batch">
+}
+
+function setHtml(b, sendable, from) {
+  return `<article class="batch">
       <div class="when">${esc(b.time)}</div>
       <div class="songs">
         <div>${esc(b.song_one)} <span>music${b.music_key ? ", " + esc(b.music_key) + ", " + Math.round(b.music_bpm) + " BPM" : ""}</span></div>
         <div>${esc(b.song_two)} <span>voice${b.voice_key ? ", " + esc(b.voice_key) + ", " + Math.round(b.voice_bpm) + " BPM" : ""}</span></div>
       </div>
-      <div class="pads">${pads}</div>
+      ${from ? `<div class="from">${from}</div>` : ""}
+      <div class="pads">${padsHtml(b, sendable)}</div>
     </article>`;
-  }).join("");
+}
+
+function render() {
+  const list = document.getElementById("list");
+  if (current) { player.pause(); current = null; }
+  if (stage === 1) {
+    drawTrend(data1);
+    list.innerHTML = data1.length ? data1.map(b => setHtml(b, true, "")).join("")
+      : '<p class="empty">No runs yet. Start an experiment on the server and it shows up here.</p>';
+    return;
+  }
+  drawTrend(data2.sets);
+  const pend = data2.pending.map(p => `<div class="pending">${p.status === "error"
+      ? "A stage two run failed: " + esc(p.error || "unknown error") + ". Send the sample again to retry."
+      : "Working on sample " + esc(String.fromCharCode(64 + (+p.run || 1))) + " from the " + esc((p.key || "").split("|")[0]) + " set sent at " + esc(p.time) + ": " + esc(p.progress) + "."}</div>`).join("");
+  list.innerHTML = pend + (data2.sets.length ? data2.sets.map(b => setHtml(b, false,
+      `Made from stage one sample ${esc(b.parent_sample)} (${esc(b.parent_label)}) of the ${esc(b.parent_time)} set.`)).join("")
+    : (pend ? "" : '<p class="empty">Nothing here yet. In stage one, tap Send to ElevenLabs under any sample.</p>'));
 }
 
 document.addEventListener("click", async e => {
@@ -140,6 +176,26 @@ document.addEventListener("click", async e => {
     pad.classList.add("playing");
     pad.querySelector(".state").textContent = "Loading";
     player.play().catch(() => { pad.querySelector(".state").textContent = "This sample could not be loaded."; });
+    return;
+  }
+  const send = e.target.closest(".send");
+  if (send) {
+    send.disabled = true;
+    send.textContent = "Sending";
+    try {
+      const r = await fetch("/api/stage2", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key: send.dataset.key, run: +send.dataset.run, tool: "elevenlabs" }) });
+      if (!r.ok) throw new Error(r.status);
+      send.textContent = "Sent, see stage two";
+    } catch (err) { send.disabled = false; send.textContent = "Not sent, tap to retry"; }
+    return;
+  }
+  const tab = e.target.closest(".tabs button");
+  if (tab) {
+    stage = tab.id === "tab2" ? 2 : 1;
+    document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", b === tab ? "true" : "false"));
+    if (stage === 2) await loadStage2();
+    render();
     return;
   }
   const star = e.target.closest(".stars button");
@@ -159,8 +215,15 @@ player.addEventListener("timeupdate", () => {
   if (current && player.duration) current.querySelector(".seek b").style.width = (player.currentTime / player.duration * 100) + "%";
 });
 
-fetch("/api/experiments").then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(render)
+async function loadStage2() {
+  try { const r = await fetch("/api/stage2"); if (r.ok) data2 = await r.json(); } catch (err) {}
+}
+fetch("/api/experiments").then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+  .then(d => { data1 = d; render(); })
   .catch(() => { document.getElementById("list").innerHTML = '<p class="err">The run list did not load. Reload the page; if it keeps failing, the server is restarting or down.</p>'; });
+setInterval(async () => {
+  if (stage === 2 && (!current || player.paused)) { await loadStage2(); render(); }
+}, 20000);
 </script>
 </body>
 </html>
