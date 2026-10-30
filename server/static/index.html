@@ -180,6 +180,8 @@ let data1 = [], data2 = { sets: [], pending: [] };
 let project = "";
 let projects = [];
 try { project = localStorage.getItem("sbProject") || ""; } catch (err) {}
+const linked = new URLSearchParams(location.search).get("project");
+if (linked) { project = linked; try { localStorage.setItem("sbProject", project); } catch (err) {} }
 
 function padsHtml(b, sendable) {
   const best = Math.max(...b.samples.map(s => s.both_recognizable_pct || 0));
