@@ -11,6 +11,7 @@ print(json.dumps({"song1": {"file": inbox + a[0], "title": a[1]},
 ' "$@")
 J=$(curl -s -X POST -H "x-sb-key: $SB_TOKEN" -H "content-type: application/json" -d "$BODY" 127.0.0.1:8110/jobs | python3 -c 'import sys,json;print(json.load(sys.stdin)["job"])')
 echo JOB $J
+echo $J > /opt/smash-bender/last_job
 while true; do
   S=$(curl -s -H "x-sb-key: $SB_TOKEN" 127.0.0.1:8110/jobs/$J)
   echo "$S"
