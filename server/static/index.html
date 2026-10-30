@@ -59,6 +59,7 @@ header p { margin: 0; color: var(--muted); max-width: 60ch; }
   background: var(--panel); font: 500 0.95rem/1.2 var(--head); }
 .tabs button[aria-selected="true"] { border-color: var(--ink); background: var(--ink); color: #fff; }
 .tabs button:focus-visible { outline: 3px solid var(--cobalt); outline-offset: 2px; }
+.sends { display: flex; flex-direction: column; gap: 6px; }
 .send { all: unset; cursor: pointer; text-align: center; font-size: 0.82rem; font-weight: 700; color: var(--cobalt);
   border: 2px solid var(--cobalt); border-radius: 8px; padding: 6px 4px; }
 .send:focus-visible { outline: 3px solid var(--cobalt); outline-offset: 2px; }
@@ -75,7 +76,8 @@ header p { margin: 0; color: var(--muted); max-width: 60ch; }
     <p>Every test run, newest first. Tap a lettered pad to play it, rate it, and watch the trend to see if changes help or hurt.</p>
     <div class="tabs" role="tablist">
       <button role="tab" id="tab1" aria-selected="true">Stage one: placing the voice</button>
-      <button role="tab" id="tab2" aria-selected="false">Stage two: ElevenLabs</button>
+      <button role="tab" id="tab2" aria-selected="false">Stage two</button>
+      <button role="tab" id="tab3" aria-selected="false">Stage three</button>
     </div>
   </header>
   <section class="trend" aria-label="Progress over time">
@@ -128,10 +130,14 @@ function padsHtml(b, sendable) {
         ${bar("Voice", s.sounds_like_voice_pct)}
         ${bar("Both", s.both_recognizable_pct, "both")}
         <div class="notes">${esc(s.notes)}</div>
+        <a class="send" href="${esc(s.audio)}" download="${esc((b.song_two + " over " + b.song_one + " " + b.time + " " + s.sample).replace(/[^A-Za-z0-9 ]+/g, "").trim().replace(/ +/g, "-"))}.mp3">Download</a>
         <div class="stars" role="group" aria-label="Rate sample ${esc(s.sample)}">
           ${[1,2,3,4,5].map(n => `<button data-key="${esc(b.key)}" data-run="${s.run}" data-stars="${n}" class="${n <= (s.rating || 0) ? "on" : ""}" aria-label="${n} star${n > 1 ? "s" : ""}">\u2605</button>`).join("")}
         </div>
-        ${sendable ? `<button class="send" data-key="${esc(b.key)}" data-run="${s.run}">Send to ElevenLabs</button>` : ""}
+        ${sendable ? `<div class="sends">
+          <button class="send" data-key="${esc(b.key)}" data-run="${s.run}" data-tool="elevenlabs">Send to ElevenLabs</button>
+          <button class="send" data-key="${esc(b.key)}" data-run="${s.run}" data-tool="autotune">Send to Auto-Tune</button>
+        </div>` : ""}
       </div>`).join("");
 }
 
@@ -156,13 +162,15 @@ function render() {
       : '<p class="empty">No runs yet. Start an experiment on the server and it shows up here.</p>';
     return;
   }
-  drawTrend(data2.sets);
-  const pend = data2.pending.map(p => `<div class="pending">${p.status === "error"
-      ? "A stage two run failed: " + esc(p.error || "unknown error") + ". Send the sample again to retry."
-      : "Working on sample " + esc(String.fromCharCode(64 + (+p.run || 1))) + " from the " + esc((p.key || "").split("|")[0]) + " set sent at " + esc(p.time) + ": " + esc(p.progress) + "."}</div>`).join("");
-  list.innerHTML = pend + (data2.sets.length ? data2.sets.map(b => setHtml(b, false,
-      `Made from stage one sample ${esc(b.parent_sample)} (${esc(b.parent_label)}) of the ${esc(b.parent_time)} set.`)).join("")
-    : (pend ? "" : '<p class="empty">Nothing here yet. In stage one, tap Send to ElevenLabs under any sample.</p>'));
+  const sets = data2.sets.filter(b => (b.stage_num || 2) === stage);
+  drawTrend(sets);
+  const pend = data2.pending.filter(p => (+p.stage || 2) === stage).map(p => `<div class="pending">${p.status === "error"
+      ? esc(p.tool_name || "This") + " run failed: " + esc(p.error || "unknown error") + ". Send the sample again to retry."
+      : esc(p.tool_name || "Processing") + " is working on sample " + esc(String.fromCharCode(64 + (+p.run || 1))) + " from the " + esc((p.key || "").split("|").slice(-2, -1)[0] || "") + " set, sent at " + esc(p.time) + ": " + esc(p.progress) + "."}</div>`).join("");
+  const word = stage === 2 ? "one" : "two";
+  list.innerHTML = pend + (sets.length ? sets.map(b => setHtml(b, stage < 3,
+      `${esc(b.stage_name)}, made from stage ${word} sample ${esc(b.parent_sample)} (${esc(b.parent_tool ? b.parent_tool + ", " : "")}${esc(b.parent_label)}) of the ${esc(b.parent_time)} set.`)).join("")
+    : (pend ? "" : `<p class="empty">Nothing here yet. In stage ${word}, tap Send to ElevenLabs or Send to Auto-Tune under any sample.</p>`));
 }
 
 document.addEventListener("click", async e => {
@@ -178,23 +186,23 @@ document.addEventListener("click", async e => {
     player.play().catch(() => { pad.querySelector(".state").textContent = "This sample could not be loaded."; });
     return;
   }
-  const send = e.target.closest(".send");
+  const send = e.target.closest("button.send");
   if (send) {
     send.disabled = true;
     send.textContent = "Sending";
     try {
       const r = await fetch("/api/stage2", { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ key: send.dataset.key, run: +send.dataset.run, tool: "elevenlabs" }) });
+        body: JSON.stringify({ key: send.dataset.key, run: +send.dataset.run, tool: send.dataset.tool }) });
       if (!r.ok) throw new Error(r.status);
-      send.textContent = "Sent, see stage two";
+      send.textContent = "Sent, see stage " + (stage === 1 ? "two" : "three");
     } catch (err) { send.disabled = false; send.textContent = "Not sent, tap to retry"; }
     return;
   }
   const tab = e.target.closest(".tabs button");
   if (tab) {
-    stage = tab.id === "tab2" ? 2 : 1;
+    stage = +tab.id.slice(3);
     document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", b === tab ? "true" : "false"));
-    if (stage === 2) await loadStage2();
+    if (stage > 1) await loadStage2();
     render();
     return;
   }
@@ -222,7 +230,7 @@ fetch("/api/experiments").then(r => { if (!r.ok) throw new Error(r.status); retu
   .then(d => { data1 = d; render(); })
   .catch(() => { document.getElementById("list").innerHTML = '<p class="err">The run list did not load. Reload the page; if it keeps failing, the server is restarting or down.</p>'; });
 setInterval(async () => {
-  if (stage === 2 && (!current || player.paused)) { await loadStage2(); render(); }
+  if (stage > 1 && (!current || player.paused)) { await loadStage2(); render(); }
 }, 20000);
 </script>
 </body>
