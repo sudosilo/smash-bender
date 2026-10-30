@@ -93,6 +93,8 @@ def likeness(a, b):
     return round(max(0.0, (0.5 - best) / 0.5) * 100, 1)
 
 
+inst_keep = os.path.join(work, "inst%s.wav" % stamp)
+subprocess.run(["cp", inst_wav, inst_keep], check=True)
 fp_inst = prints(inst_wav)
 inst, _ = sf.read(inst_wav)
 log_path = os.path.join(BASE, "data", "experiments", name + ".jsonl")
@@ -134,6 +136,8 @@ for i, v in enumerate(VARIANTS, 1):
     os.makedirs(out_dir, exist_ok=True)
     tmp = os.path.join(out_dir, "mix.wav")
     sf.write(tmp, mix, SR)
+    voice_keep = os.path.join(out_dir, "voice.wav")
+    sf.write(voice_keep, vv, SR)
     mp3 = os.path.join(out_dir, "mix.mp3")
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", tmp, "-b:a", "192k", mp3], check=True)
     os.remove(tmp)
@@ -162,7 +166,8 @@ for i, v in enumerate(VARIANTS, 1):
            "hypothesis": v["hypothesis"], "words_understood_pct": heard["understood_pct"],
            "sounds_like_music_pct": music_like, "sounds_like_voice_pct": voice_like,
            "both_recognizable_pct": both, "notes": " ".join(notes), "heard": heard["heard"],
-           "audio": "/files/%s/mix.mp3" % folder,
+           "audio": "/files/%s/mix.mp3" % folder, "voice_path": voice_keep, "inst_path": inst_keep,
+           "acap_path": acap_wav, "reference_path": os.path.join(work, "reference_words.json"),
            "listen": "smash-bender.167-233-137-169.sslip.io/files/%s/mix.mp3" % folder}
     results.append(rec)
     open(log_path, "a").write(json.dumps(rec) + "\n")
