@@ -1,12 +1,23 @@
 #!/bin/bash
-# usage: sbjob.sh SONG1_FILE SONG1_ARTIST SONG1_TRACK SONG2_FILE SONG2_ARTIST SONG2_TRACK [SECONDS]
+# usage: sbjob.sh SONG1 SONG1_ARTIST SONG1_TRACK SONG2 SONG2_ARTIST SONG2_TRACK [SECONDS]
+# SONG1 is a full-song file, or INSTRUMENTAL_FILE,ACAPELLA_FILE (comma, no space) to skip splitting
+# SONG2 is a full-song file, or acap:ACAPELLA_FILE to skip splitting
 cd /opt/smash-bender && . ./.env
 BODY=$(python3 -c '
 import json, sys
 a = sys.argv[1:]
 inbox = "/opt/smash-bender/data/inbox/"
-print(json.dumps({"song1": {"file": inbox + a[0], "title": a[2], "artist": a[1], "track": a[2]},
-                  "song2": {"file": inbox + a[3], "title": a[5], "artist": a[4], "track": a[5]},
+def spec(f, artist, track):
+    s = {"title": track, "artist": artist, "track": track}
+    if "," in f:
+        i, v = f.split(",", 1)
+        s.update(instrumental_file=inbox + i, vocals_file=inbox + v)
+    elif f.startswith("acap:"):
+        s["vocals_file"] = inbox + f[5:]
+    else:
+        s["file"] = inbox + f
+    return s
+print(json.dumps({"song1": spec(a[0], a[1], a[2]), "song2": spec(a[3], a[4], a[5]),
                   "seconds": int(a[6]) if len(a) > 6 else 45}))
 ' "$@")
 J=$(curl -s -X POST -H "x-sb-key: $SB_TOKEN" -H "content-type: application/json" -d "$BODY" 127.0.0.1:8110/jobs | python3 -c 'import sys,json;print(json.load(sys.stdin)["job"])')
