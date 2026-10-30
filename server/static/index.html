@@ -84,11 +84,7 @@ header p { margin: 0; color: var(--muted); max-width: 60ch; }
   <header>
     <h1>Sample log</h1>
     <p>Every test run, newest first. Tap a lettered pad to play it, rate it, and watch the trend to see if changes help or hurt.</p>
-    <div class="tabs" role="tablist">
-      <button role="tab" id="tab1" aria-selected="true">Stage one: placing the voice</button>
-      <button role="tab" id="tab2" aria-selected="false">Stage two</button>
-      <button role="tab" id="tab3" aria-selected="false">Stage three</button>
-    </div>
+    <div class="tabs" role="tablist" id="tabs"></div>
   </header>
   <section class="trend" aria-label="Progress over time">
     <h2>Best result per run set</h2>
@@ -152,6 +148,7 @@ function padsHtml(b, sendable) {
         ${sendable ? `<div class="sends">
           <button class="send" data-key="${esc(b.key)}" data-run="${s.run}" data-tool="elevenlabs">Send to ElevenLabs</button>
           <button class="send" data-key="${esc(b.key)}" data-run="${s.run}" data-tool="autotune">Send to Auto-Tune</button>
+          <button class="send" data-key="${esc(b.key)}" data-run="${s.run}" data-tool="instrument">Send to Instrument</button>
         </div>` : ""}
       </div>`).join("");
 }
@@ -168,7 +165,17 @@ function setHtml(b, sendable, from) {
     </article>`;
 }
 
+function drawTabs() {
+  const top = Math.max(2, ...data2.sets.map(b => b.stage_num || 2), ...data2.pending.map(p => +p.stage || 2));
+  let html = "";
+  for (let n = 1; n <= top; n++) {
+    html += `<button role="tab" id="tab${n}" aria-selected="${n === stage}">Stage ${n}${n === 1 ? ": placing the voice" : ""}</button>`;
+  }
+  document.getElementById("tabs").innerHTML = html;
+}
+
 function render() {
+  drawTabs();
   const list = document.getElementById("list");
   if (current) { player.pause(); current = null; }
   if (stage === 1) {
@@ -182,10 +189,10 @@ function render() {
   const pend = data2.pending.filter(p => (+p.stage || 2) === stage).map(p => `<div class="pending">${p.status === "error"
       ? esc(p.tool_name || "This") + " run failed: " + esc(p.error || "unknown error") + ". Send the sample again to retry."
       : esc(p.tool_name || "Processing") + " is working on sample " + esc(String.fromCharCode(64 + (+p.run || 1))) + " from the " + esc((p.key || "").split("|").slice(-2, -1)[0] || "") + " set, sent at " + esc(p.time) + ": " + esc(p.progress) + "."}</div>`).join("");
-  const word = stage === 2 ? "one" : "two";
-  list.innerHTML = pend + (sets.length ? sets.map(b => setHtml(b, stage < 3,
-      `${esc(b.stage_name)}, made from stage ${word} sample ${esc(b.parent_sample)} (${esc(b.parent_tool ? b.parent_tool + ", " : "")}${esc(b.parent_label)}) of the ${esc(b.parent_time)} set.`)).join("")
-    : (pend ? "" : `<p class="empty">Nothing here yet. In stage ${word}, tap Send to ElevenLabs or Send to Auto-Tune under any sample.</p>`));
+  const prev = stage - 1;
+  list.innerHTML = pend + (sets.length ? sets.map(b => setHtml(b, true,
+      `${esc(b.stage_name)}, made from stage ${prev} sample ${esc(b.parent_sample)} (${esc(b.parent_tool ? b.parent_tool + ", " : "")}${esc(b.parent_label)}) of the ${esc(b.parent_time)} set.`)).join("")
+    : (pend ? "" : `<p class="empty">Nothing here yet. In stage ${prev}, tap one of the Send buttons under any sample.</p>`));
 }
 
 document.addEventListener("click", async e => {
@@ -218,7 +225,9 @@ document.addEventListener("click", async e => {
       const r = await fetch("/api/stage2", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ key: send.dataset.key, run: +send.dataset.run, tool: send.dataset.tool }) });
       if (!r.ok) throw new Error(r.status);
-      send.textContent = "Sent, see stage " + (stage === 1 ? "two" : "three");
+      send.textContent = "Sent, see stage " + (stage + 1);
+      await loadStage2();
+      drawTabs();
     } catch (err) { send.disabled = false; send.textContent = "Not sent, tap to retry"; }
     return;
   }
@@ -251,7 +260,7 @@ player.addEventListener("timeupdate", () => {
 async function loadStage2() {
   try { const r = await fetch("/api/stage2"); if (r.ok) data2 = await r.json(); } catch (err) {}
 }
-fetch("/api/experiments").then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+loadStage2().then(() => fetch("/api/experiments")).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
   .then(d => { data1 = d; render(); })
   .catch(() => { document.getElementById("list").innerHTML = '<p class="err">The run list did not load. Reload the page; if it keeps failing, the server is restarting or down.</p>'; });
 setInterval(async () => {
