@@ -121,6 +121,70 @@ def fetch_urls(spec, job, label, need_inst, seconds=0):
     return d, spec.get("title", "")
 
 
+WX = os.environ.get("SB_WX", "/opt/smash-bender/wx/bin/python")
+
+
+def word_map(d, job, label):
+    path = os.path.join(d, "words.json")
+    if not os.path.exists(path):
+        if not os.path.exists(WX):
+            return []
+        set_state(job, progress="finding words in " + label)
+        here = os.path.dirname(os.path.abspath(__file__))
+        try:
+            run([WX, os.path.join(here, "wordmap.py"), os.path.join(d, "vocals.wav"), path])
+        except RuntimeError as e:
+            set_state(job, word_error=str(e)[:300])
+            return []
+    return json.load(open(path)).get("words", [])
+
+
+def pitch_track(path):
+    y, _ = librosa.load(path, sr=ASR, mono=True)
+    f0, voiced, _ = librosa.pyin(y, fmin=65, fmax=1000, sr=ASR, hop_length=HOP)
+    return np.where(voiced & ~np.isnan(f0), librosa.hz_to_midi(np.where(np.isnan(f0), 1.0, f0)), np.nan)
+
+
+def mid_pitch(track, start, end):
+    ft = HOP / ASR
+    seg = track[int(start / ft):max(int(start / ft) + 1, int(end / ft))]
+    seg = seg[~np.isnan(seg)]
+    return round(float(np.median(seg)), 2) if len(seg) else None
+
+
+def plan_from_words(target, words, track):
+    n, m = len(target), len(words)
+    items = []
+    if n == 0 or m == 0:
+        return items
+    fallback = mid_pitch(track, 0, 10 ** 6) or 60.0
+
+    def add(t, s0, s1, word):
+        sm = mid_pitch(track, s0, s1)
+        items.append({"i": len(items), "start": t["start"], "end": t["end"], "midi": t["midi"],
+                      "level": t.get("level", 0), "word": word,
+                      "src_start": round(s0, 4), "src_end": round(s1, 4),
+                      "src_midi": sm if sm is not None else fallback,
+                      "shift_ms": 0, "semis": 0, "trim_start_ms": 0, "trim_end_ms": 0,
+                      "mute": False})
+
+    if m <= n:
+        for j, w in enumerate(words):
+            k0 = j * n // m
+            k1 = max(k0 + 1, (j + 1) * n // m)
+            group = target[k0:k1]
+            span = (w["end"] - w["start"]) / len(group)
+            for g, t in enumerate(group):
+                add(t, w["start"] + g * span, w["start"] + (g + 1) * span, w["word"] if g == 0 else "")
+    else:
+        for i, t in enumerate(target):
+            j0 = i * m // n
+            j1 = max(j0 + 1, (i + 1) * m // n)
+            ws = words[j0:j1]
+            add(t, ws[0]["start"], ws[-1]["end"], " ".join(w["word"] for w in ws))
+    return items
+
+
 def find_notes(path):
     y, _ = librosa.load(path, sr=ASR, mono=True)
     f0, voiced, _ = librosa.pyin(y, fmin=65, fmax=1000, sr=ASR, hop_length=HOP)
@@ -281,9 +345,15 @@ def run_job(job):
         json.dump(meta, open(os.path.join(d, "meta.json"), "w"))
         set_state(job, title1=t1, title2=t2, progress="reading melody of song one")
         target = find_notes(os.path.join(dir1, "vocals.wav"))
+        words = word_map(dir2, job, "song two")
         set_state(job, progress="reading syllables of song two")
-        source = find_notes(os.path.join(dir2, "vocals.wav"))
-        plan = {"items": build_plan(target, source)}
+        if len(words) >= 3:
+            track = pitch_track(os.path.join(dir2, "vocals.wav"))
+            plan = {"items": plan_from_words(target, words, track), "mode": "words"}
+        else:
+            source = find_notes(os.path.join(dir2, "vocals.wav"))
+            plan = {"items": build_plan(target, source), "mode": "notes"}
+        set_state(job, plan_mode=plan["mode"], words=len(words))
         json.dump(plan, open(os.path.join(d, "plan.json"), "w"))
         render(job)
     except Exception as e:
