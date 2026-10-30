@@ -70,9 +70,9 @@ def demucs(d, src, job, label):
     shutil.rmtree(out, ignore_errors=True)
 
 
-def fetch_and_split(spec, job, label, need_inst, seconds=0):
+def fetch_and_split(spec, job, label, need_inst, seconds=0, need_voc=True):
     if isinstance(spec, dict):
-        return fetch_urls(spec, job, label, need_inst, seconds)
+        return fetch_urls(spec, job, label, need_inst, seconds, need_voc)
     query = spec
     d = os.path.join(DATA, "songs", song_key(query + "|" + str(seconds)))
     os.makedirs(d, exist_ok=True)
@@ -99,7 +99,7 @@ def fetch_and_split(spec, job, label, need_inst, seconds=0):
     return d, title
 
 
-def fetch_urls(spec, job, label, need_inst, seconds=0):
+def fetch_urls(spec, job, label, need_inst, seconds=0, need_voc=True):
     key = json.dumps(spec, sort_keys=True) + "|" + str(seconds)
     d = os.path.join(DATA, "songs", song_key(key))
     os.makedirs(d, exist_ok=True)
@@ -123,7 +123,7 @@ def fetch_urls(spec, job, label, need_inst, seconds=0):
             grab(spec["vocals_url"], voc, seconds)
         if spec.get("instrumental_url") and not os.path.exists(inst):
             grab(spec["instrumental_url"], inst, seconds)
-    if not os.path.exists(voc) or (need_inst and not os.path.exists(inst)):
+    if (need_voc and not os.path.exists(voc)) or (need_inst and not os.path.exists(inst)):
         raise RuntimeError(label + ": missing vocals or instrumental source")
     return d, spec.get("title", "")
 
@@ -421,6 +421,39 @@ def render(job):
     set_state(job, status="done", progress="done", rev=rev)
 
 
+def mix_down(d, inst, vocal):
+    if inst.ndim == 1:
+        inst = np.vstack([inst, inst])
+    final = np.zeros(inst.shape[1], dtype=np.float32)
+    final[:min(len(vocal), len(final))] = vocal[:len(final)]
+    inst_level = float(np.sqrt(np.mean(inst ** 2))) or 1e-3
+    loud = final[np.abs(final) > 1e-4]
+    voc_level = float(np.sqrt(np.mean(loud ** 2))) if len(loud) else 0.0
+    if voc_level > 1e-5:
+        final = final * (inst_level * 1.4 / voc_level)
+    mix = inst + final[None, :]
+    peak = float(np.max(np.abs(mix))) or 1.0
+    mix = mix / max(peak, 1.0) * 0.98
+    wav = os.path.join(d, "mix.wav")
+    sf.write(wav, mix.T, SR)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", wav, "-b:a", "192k",
+                    os.path.join(d, "mix.mp3")], check=True)
+    os.remove(wav)
+
+
+def run_overlay(job, d, meta, secs):
+    dir1, t1 = fetch_and_split(meta["song1"], job, "song one", True, secs, need_voc=False)
+    dir2, t2 = fetch_and_split(meta["song2"], job, "song two", False, secs)
+    meta.update({"dir1": dir1, "dir2": dir2, "title1": t1, "title2": t2})
+    json.dump(meta, open(os.path.join(d, "meta.json"), "w"))
+    set_state(job, title1=t1, title2=t2, plan_mode="overlay", progress="mixing")
+    inst, _ = librosa.load(os.path.join(dir1, "instrumental.wav"), sr=SR, mono=False)
+    vocal, _ = librosa.load(os.path.join(dir2, "vocals.wav"), sr=SR, mono=True)
+    mix_down(d, inst, vocal)
+    rev = int(r.hget("sb:job:" + job, "rev") or 0) + 1
+    set_state(job, status="done", progress="done", rev=rev)
+
+
 def run_job(job):
     try:
         d = job_dir(job)
@@ -432,6 +465,8 @@ def run_job(job):
             picked = ccmixter.pick(meta["ccmixter"])
             meta.update(picked)
         secs = int(meta.get("seconds", 30) or 0)
+        if meta.get("overlay"):
+            return run_overlay(job, d, meta, secs)
         dir1, t1 = fetch_and_split(meta["song1"], job, "song one", True, secs)
         dir2, t2 = fetch_and_split(meta["song2"], job, "song two", False, secs)
         meta.update({"dir1": dir1, "dir2": dir2, "title1": t1, "title2": t2})
