@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import time
 import pipeline
+import stage2
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -111,7 +112,7 @@ def experiments():
     batches = {}
     if os.path.isdir(EXP):
         for fn in os.listdir(EXP):
-            if not fn.endswith(".jsonl"):
+            if not fn.endswith(".jsonl") or fn.endswith(".stage2.jsonl"):
                 continue
             for line in open(os.path.join(EXP, fn)):
                 try:
@@ -149,3 +150,52 @@ async def rate(req: Request):
     os.makedirs(EXP, exist_ok=True)
     json.dump(ratings, open(RATINGS, "w"))
     return {"ok": True}
+
+
+@app.post("/api/stage2")
+async def send_stage2(req: Request):
+    body = await req.json()
+    tool = body.get("tool", "elevenlabs")
+    if tool not in stage2.TOOLS or not body.get("key") or not body.get("run"):
+        raise HTTPException(400, "key, run and a known tool required")
+    job_id = uuid.uuid4().hex[:8]
+    r.hset("sb:stage2:" + job_id, mapping={"status": "queued", "progress": "waiting", "key": body["key"],
+                                            "run": str(int(body["run"])), "tool": tool,
+                                            "time": time.strftime("%Y-%m-%d %H:%M")})
+    r.expire("sb:stage2:" + job_id, 86400)
+    q.enqueue(stage2.run_stage2, job_id, body["key"], int(body["run"]), tool, job_timeout=3600)
+    return {"job": job_id}
+
+
+@app.get("/api/stage2")
+def list_stage2():
+    batches = {}
+    if os.path.isdir(EXP):
+        for fn in os.listdir(EXP):
+            if not fn.endswith(".stage2.jsonl"):
+                continue
+            for line in open(os.path.join(EXP, fn)):
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                key = "s2|" + rec.get("experiment", "") + "|" + rec.get("batch", "")
+                batches.setdefault(key, []).append(rec)
+    ratings = load_ratings()
+    out = []
+    for key, recs in batches.items():
+        recs.sort(key=lambda x: x.get("run", 0))
+        for x in recs:
+            x["rating"] = ratings.get(key + "|" + str(x.get("run")), 0)
+        f = recs[0]
+        out.append({"key": key, "experiment": f.get("experiment"), "time": f.get("time"), "stage": f.get("stage"),
+                    "stage_name": f.get("stage_name"), "song_one": f.get("song_one", ""),
+                    "song_two": f.get("song_two", ""), "parent_sample": f.get("parent_sample"),
+                    "parent_label": f.get("parent_label"), "parent_time": f.get("parent_time"), "samples": recs})
+    out.sort(key=lambda b: b["time"] or "", reverse=True)
+    pending = []
+    for k in r.scan_iter("sb:stage2:*"):
+        h = r.hgetall(k)
+        if h.get("status") in ("queued", "working", "error"):
+            pending.append(h)
+    return {"sets": out, "pending": pending}
