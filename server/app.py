@@ -162,8 +162,6 @@ async def send_stage2(req: Request):
         parent = stage2.find_parent(body["key"], int(body["run"]))
     except RuntimeError:
         raise HTTPException(404, "that sample was not found")
-    if int(parent.get("stage_num", 1)) >= 3:
-        raise HTTPException(400, "stage three is the last stage for now")
     job_id = uuid.uuid4().hex[:8]
     r.hset("sb:stage2:" + job_id, mapping={"status": "queued", "progress": "waiting", "key": body["key"],
                                             "run": str(int(body["run"])), "tool": tool,
