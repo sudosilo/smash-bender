@@ -65,6 +65,16 @@ header p { margin: 0; color: var(--muted); max-width: 60ch; }
 .send:focus-visible { outline: 3px solid var(--cobalt); outline-offset: 2px; }
 .send[disabled] { color: var(--muted); border-color: var(--line); cursor: default; }
 .from { color: var(--muted); font-size: 0.9rem; margin: -8px 0 12px; }
+.cmt { all: unset; cursor: pointer; font-size: 0.82rem; font-weight: 700; color: var(--ink); border-bottom: 2px dotted var(--muted); align-self: flex-start; }
+.cmt:focus-visible { outline: 3px solid var(--cobalt); outline-offset: 2px; }
+.sheet { position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 20;
+  max-width: 520px; margin: 0 auto; background: var(--panel); border: 2px solid var(--ink); border-radius: 14px;
+  padding: 14px 16px; box-shadow: 0 10px 30px rgba(20, 32, 43, 0.25); }
+.sheet[hidden] { display: none; }
+.sheet h3 { font: 800 1.1rem/1.2 var(--head); margin: 0 36px 6px 0; }
+.sheet p { margin: 0; font-size: 0.95rem; line-height: 1.45; max-height: 40vh; overflow-y: auto; }
+.sheet .close { all: unset; cursor: pointer; position: absolute; top: 8px; right: 10px; font-size: 1.6rem; line-height: 1; padding: 4px 8px; border-radius: 8px; }
+.sheet .close:focus-visible { outline: 3px solid var(--cobalt); }
 .pending { background: #fff8ec; border: 1px solid #f0d9b5; border-radius: 12px; padding: 10px 14px; margin-top: 16px; font-size: 0.9rem; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -87,6 +97,11 @@ header p { margin: 0; color: var(--muted); max-width: 60ch; }
   </section>
   <div id="list"></div>
 </main>
+<div class="sheet" id="sheet" role="dialog" aria-modal="false" aria-labelledby="sheettitle" hidden>
+  <button class="close" id="sheetclose" aria-label="Close comments">×</button>
+  <h3 id="sheettitle"></h3>
+  <p id="sheettext"></p>
+</div>
 <audio id="player" preload="none"></audio>
 <script>
 const player = document.getElementById("player");
@@ -129,7 +144,7 @@ function padsHtml(b, sendable) {
         ${bar("Music", s.sounds_like_music_pct)}
         ${bar("Voice", s.sounds_like_voice_pct)}
         ${bar("Both", s.both_recognizable_pct, "both")}
-        <div class="notes">${esc(s.notes)}</div>
+        <button class="cmt" data-title="Sample ${esc(s.sample)}, ${esc(s.label)}" data-notes="${esc(s.notes)}">Comments</button>
         <a class="send" href="${esc(s.audio)}" download="${esc((b.song_two + " over " + b.song_one + " " + b.time + " " + s.sample).replace(/[^A-Za-z0-9 ]+/g, "").trim().replace(/ +/g, "-"))}.mp3">Download</a>
         <div class="stars" role="group" aria-label="Rate sample ${esc(s.sample)}">
           ${[1,2,3,4,5].map(n => `<button data-key="${esc(b.key)}" data-run="${s.run}" data-stars="${n}" class="${n <= (s.rating || 0) ? "on" : ""}" aria-label="${n} star${n > 1 ? "s" : ""}">\u2605</button>`).join("")}
@@ -186,6 +201,15 @@ document.addEventListener("click", async e => {
     player.play().catch(() => { pad.querySelector(".state").textContent = "This sample could not be loaded."; });
     return;
   }
+  const cmt = e.target.closest(".cmt");
+  if (cmt) {
+    document.getElementById("sheettitle").textContent = cmt.dataset.title;
+    document.getElementById("sheettext").textContent = cmt.dataset.notes;
+    document.getElementById("sheet").hidden = false;
+    document.getElementById("sheetclose").focus();
+    return;
+  }
+  if (e.target.closest("#sheetclose")) { document.getElementById("sheet").hidden = true; return; }
   const send = e.target.closest("button.send");
   if (send) {
     send.disabled = true;
@@ -216,6 +240,7 @@ document.addEventListener("click", async e => {
     } catch (err) { star.parentElement.insertAdjacentHTML("afterend", '<div class="notes">Rating not saved. Check the connection and tap again.</div>'); }
   }
 });
+document.addEventListener("keydown", e => { if (e.key === "Escape") document.getElementById("sheet").hidden = true; });
 player.addEventListener("playing", () => current && (current.querySelector(".state").textContent = "Playing, tap the letter to pause"));
 player.addEventListener("pause", () => current && (current.querySelector(".state").textContent = "Paused"));
 player.addEventListener("ended", () => { if (current) { current.classList.remove("playing"); current.querySelector(".state").textContent = "Finished"; } });
