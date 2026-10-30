@@ -4,6 +4,7 @@ import soundfile as sf
 import essentia.standard as es
 
 # usage: experiment.py INSTRUMENTAL_FILE ACAPELLA_FILE NAME [SECONDS] [MAX_RUNS] [SONG_ONE_LABEL] [SONG_TWO_LABEL]
+#        [MUSIC_START] [VOICE_START]   (seconds into each file where the clip begins, default 0)
 # (lab python) NAME is letters and digits only.
 # Runs up to MAX_RUNS (cap 4) versions of song two's a cappella over song one's instrumental,
 # each testing one idea, checks every result, and logs hypothesis, change, measurements and notes.
@@ -14,6 +15,8 @@ secs = float(sys.argv[4]) if len(sys.argv) > 4 else 45.0
 runs = min(4, int(sys.argv[5]) if len(sys.argv) > 5 else 4)
 song_one = sys.argv[6] if len(sys.argv) > 6 else inst_file
 song_two = sys.argv[7] if len(sys.argv) > 7 else acap_file
+music_start = float(sys.argv[8]) if len(sys.argv) > 8 else 0.0
+voice_start = float(sys.argv[9]) if len(sys.argv) > 9 else 0.0
 stamp = time.strftime("%m%d%H%M")
 SR = 44100
 work = os.path.join(BASE, "data", "experiments", name)
@@ -21,13 +24,14 @@ os.makedirs(work, exist_ok=True)
 NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 
-def ff(src, dest, extra=()):
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-t", str(secs), "-ar", str(SR)] + list(extra) + [dest], check=True)
+def ff(src, dest, start, extra=()):
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "%.3f" % max(0.0, start), "-i", src,
+                    "-t", str(secs), "-ar", str(SR)] + list(extra) + [dest], check=True)
 
 
 inst_wav, acap_wav = os.path.join(work, "inst.wav"), os.path.join(work, "acap.wav")
-ff(os.path.join(INBOX, inst_file), inst_wav, ["-ac", "2"])
-ff(os.path.join(INBOX, acap_file), acap_wav, ["-ac", "1"])
+ff(os.path.join(INBOX, inst_file), inst_wav, music_start, ["-ac", "2"])
+ff(os.path.join(INBOX, acap_file), acap_wav, voice_start, ["-ac", "1"])
 
 
 def analyze(path):
