@@ -158,9 +158,17 @@ async def send_stage2(req: Request):
     tool = body.get("tool", "elevenlabs")
     if tool not in stage2.TOOLS or not body.get("key") or not body.get("run"):
         raise HTTPException(400, "key, run and a known tool required")
+    try:
+        parent = stage2.find_parent(body["key"], int(body["run"]))
+    except RuntimeError:
+        raise HTTPException(404, "that sample was not found")
+    if int(parent.get("stage_num", 1)) >= 3:
+        raise HTTPException(400, "stage three is the last stage for now")
     job_id = uuid.uuid4().hex[:8]
     r.hset("sb:stage2:" + job_id, mapping={"status": "queued", "progress": "waiting", "key": body["key"],
                                             "run": str(int(body["run"])), "tool": tool,
+                                            "tool_name": stage2.TOOLS[tool],
+                                            "stage": str(int(parent.get("stage_num", 1)) + 1),
                                             "time": time.strftime("%Y-%m-%d %H:%M")})
     r.expire("sb:stage2:" + job_id, 86400)
     q.enqueue(stage2.run_stage2, job_id, body["key"], int(body["run"]), tool, job_timeout=3600)
@@ -189,7 +197,10 @@ def list_stage2():
             x["rating"] = ratings.get(key + "|" + str(x.get("run")), 0)
         f = recs[0]
         out.append({"key": key, "experiment": f.get("experiment"), "time": f.get("time"), "stage": f.get("stage"),
-                    "stage_name": f.get("stage_name"), "song_one": f.get("song_one", ""),
+                    "stage_name": f.get("stage_name"), "stage_num": f.get("stage_num", 2),
+                    "parent_stage": f.get("parent_stage", 1), "parent_tool": f.get("parent_tool", ""),
+                    "music_key": f.get("music_key", ""), "music_bpm": f.get("music_bpm"),
+                    "song_one": f.get("song_one", ""),
                     "song_two": f.get("song_two", ""), "parent_sample": f.get("parent_sample"),
                     "parent_label": f.get("parent_label"), "parent_time": f.get("parent_time"), "samples": recs})
     out.sort(key=lambda b: b["time"] or "", reverse=True)
