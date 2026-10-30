@@ -1,4 +1,4 @@
-import os, json, hashlib, shutil, subprocess
+import os, re, json, hashlib, shutil, subprocess
 import numpy as np
 import soundfile as sf
 import librosa
@@ -106,10 +106,13 @@ def fetch_urls(spec, job, label, need_inst, seconds=0):
     voc = os.path.join(d, "vocals.wav")
     inst = os.path.join(d, "instrumental.wav")
     set_state(job, progress="downloading " + label)
-    if spec.get("url"):
+    if spec.get("file") or spec.get("url"):
         src = os.path.join(d, "song.wav")
         if not os.path.exists(src):
-            grab(spec["url"], src, seconds)
+            if spec.get("file"):
+                trim(spec["file"], src, seconds)
+            else:
+                grab(spec["url"], src, seconds)
         demucs(d, src, job, label)
     else:
         if spec.get("vocals_url") and not os.path.exists(voc):
@@ -124,7 +127,34 @@ def fetch_urls(spec, job, label, need_inst, seconds=0):
 WX = os.environ.get("SB_WX", "/opt/smash-bender/wx/bin/python")
 
 
-def word_map(d, job, label):
+def fetch_lyrics(d, spec, job, label):
+    path = os.path.join(d, "lyrics.json")
+    if os.path.exists(path):
+        return path
+    if not isinstance(spec, dict) or not spec.get("track"):
+        return ""
+    set_state(job, progress="getting lyrics for " + label)
+    try:
+        res = requests.get("https://lrclib.net/api/get", timeout=30,
+                           params={"artist_name": spec.get("artist", ""), "track_name": spec["track"]},
+                           headers={"User-Agent": "smash-bender/1.0"})
+        synced = res.json().get("syncedLyrics") if res.ok else None
+    except (requests.RequestException, ValueError):
+        synced = None
+    if not synced:
+        set_state(job, lyrics="not found")
+        return ""
+    lines = []
+    for raw in synced.splitlines():
+        m = re.match(r"\[(\d+):(\d+(?:\.\d+)?)\](.*)", raw.strip())
+        if m:
+            lines.append({"time": int(m.group(1)) * 60 + float(m.group(2)), "text": m.group(3).strip()})
+    json.dump({"lines": lines}, open(path, "w"))
+    set_state(job, lyrics="%d lines" % len(lines))
+    return path
+
+
+def word_map(d, job, label, lyrics=""):
     path = os.path.join(d, "words.json")
     if not os.path.exists(path):
         if not os.path.exists(WX):
@@ -132,7 +162,7 @@ def word_map(d, job, label):
         set_state(job, progress="finding words in " + label)
         here = os.path.dirname(os.path.abspath(__file__))
         try:
-            run([WX, os.path.join(here, "wordmap.py"), os.path.join(d, "vocals.wav"), path])
+            run([WX, os.path.join(here, "wordmap.py"), os.path.join(d, "vocals.wav"), path, lyrics])
         except RuntimeError as e:
             set_state(job, word_error=str(e)[:300])
             return []
@@ -347,7 +377,8 @@ def run_job(job):
         json.dump(meta, open(os.path.join(d, "meta.json"), "w"))
         set_state(job, title1=t1, title2=t2, progress="reading melody of song one")
         target = find_notes(os.path.join(dir1, "vocals.wav"))
-        words = word_map(dir2, job, "song two")
+        lyr = fetch_lyrics(dir2, meta["song2"], job, "song two")
+        words = word_map(dir2, job, "song two", lyr)
         set_state(job, progress="reading syllables of song two")
         if len(words) >= 3:
             track = pitch_track(os.path.join(dir2, "vocals.wav"))
