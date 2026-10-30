@@ -11,8 +11,9 @@ DATA = os.path.join(BASE, "data")
 EXP = os.path.join(DATA, "experiments")
 SR = 44100
 r = redis.Redis(decode_responses=True)
-TOOLS = {"elevenlabs": "ElevenLabs", "autotune": "Auto-Tune"}
+TOOLS = {"elevenlabs": "ElevenLabs", "autotune": "Auto-Tune", "instrument": "Instrument"}
 LAB = os.path.join(BASE, "lab", "bin", "python")
+BP = os.path.join(BASE, "bp", "bin", "python")
 
 
 def find_parent(key, run):
@@ -92,6 +93,17 @@ def music_key(parent):
 
 
 def variants_for(tool, parent, api_key):
+    if tool == "instrument":
+        return [
+            {"label": "piano", "program": 0, "hypothesis": "A piano shows the melody most plainly.",
+             "note": "Melody played on piano."},
+            {"label": "strings", "program": 48, "hypothesis": "Strings hold long notes the way a voice does.",
+             "note": "Melody played on strings."},
+            {"label": "trumpet", "program": 56, "hypothesis": "A horn carries a sung line like a lead singer.",
+             "note": "Melody played on trumpet."},
+            {"label": "synth lead", "program": 81, "hypothesis": "A synth lead cuts through dance music.",
+             "note": "Melody played on a synth lead."},
+        ], {}
     if tool == "autotune":
         k, sc = music_key(parent)
         return [
@@ -142,7 +154,14 @@ def run_stage2(job_id, key, run, tool="elevenlabs"):
             out = os.path.join(DATA, "jobs", folder)
             os.makedirs(out, exist_ok=True)
             sung_wav = os.path.join(out, "sung.wav")
-            if tool == "autotune":
+            if tool == "instrument":
+                res = subprocess.run([BP, os.path.join(BASE, "repo", "server", "instrument.py"), parent["voice_path"],
+                                      sung_wav, str(v["program"]), parent["voice_path"] + ".notes.json"],
+                                     capture_output=True, text=True)
+                if res.returncode != 0:
+                    raise RuntimeError("instrument: " + (res.stderr.strip().splitlines() or ["failed"])[-1])
+                tool_note = v["note"] + " Words are not expected here, only the tune."
+            elif tool == "autotune":
                 res = subprocess.run([LAB, os.path.join(BASE, "repo", "server", "autotune.py"), parent["voice_path"],
                                       sung_wav, v["key"], v["scale"], str(v["speed"])] +
                                      (["chromatic"] if v["chromatic"] else []), capture_output=True, text=True)
