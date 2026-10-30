@@ -11,7 +11,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 r = redis.Redis(decode_responses=True)
 q = Queue("smash-bender", connection=redis.Redis())
 TOKEN = os.environ.get("SB_TOKEN", "")
-FILES = {"mix.mp3", "bent_vocal.wav", "sung_vocal.mp3"}
+FILES = {"mix.mp3", "bent_vocal.wav", "bent_vocal.mp3", "sung_vocal.mp3"}
 
 
 def check(req):

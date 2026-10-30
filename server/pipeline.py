@@ -300,6 +300,8 @@ def render(job):
     bent = bend(vocal, plan["items"], inst.shape[1])
     bent_path = os.path.join(d, "bent_vocal.wav")
     sf.write(bent_path, bent, SR)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", bent_path, "-b:a", "192k",
+                    os.path.join(d, "bent_vocal.mp3")], check=True)
     final = bent
     voice = meta.get("voice_id") or os.environ.get("ELEVENLABS_VOICE_ID", "")
     if voice and os.environ.get("ELEVENLABS_API_KEY"):
