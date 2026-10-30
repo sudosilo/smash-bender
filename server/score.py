@@ -26,10 +26,17 @@ placed = []
 for it in plan["items"]:
     for k, w in enumerate((it.get("word") or "").split()):
         placed.append((norm(w), it["start"] if k == 0 else None))
-n = min(len(placed), len(words1))
-same = sum(1 for i in range(n) if placed[i][0] and placed[i][0] == norm(words1[i]["word"]))
-gaps = [abs(placed[i][1] - words1[i]["start"]) * 1000 for i in range(n)
-        if placed[i][1] is not None and placed[i][0] == norm(words1[i]["word"])]
+import difflib
+ta_tok = [norm(w["word"]) for w in words1]
+pb_tok = [t for t, _ in placed]
+same, gaps = 0, []
+for op, a0, a1, b0, b1 in difflib.SequenceMatcher(None, ta_tok, pb_tok, autojunk=False).get_opcodes():
+    if op == "equal":
+        for k in range(a1 - a0):
+            same += 1
+            st = placed[b0 + k][1]
+            if st is not None:
+                gaps.append(abs(st - words1[a0 + k]["start"]) * 1000)
 
 ta = p.pitch_track(os.path.join(dir1, "vocals.wav"))
 tb = p.pitch_track(os.path.join(d, "bent_vocal.wav"))
