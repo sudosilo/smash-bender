@@ -299,14 +299,15 @@ async def save_part(slug, part, stamp, upload=None, url=""):
     return fname
 
 
-def queue_experiment(slug, music, voice, seconds, song_one, song_two, source):
+def queue_experiment(slug, music, voice, seconds, song_one, song_two, source, music_start=0.0, voice_start=0.0):
     job_id = uuid.uuid4().hex[:8]
     r.hset("sb:stage2:" + job_id, mapping={"status": "queued", "progress": "waiting", "key": slug + "|new",
                                             "run": "0", "tool": "experiment", "tool_name": "New experiment",
                                             "stage": "1", "time": time.strftime("%Y-%m-%d %H:%M"), "source": source})
     r.expire("sb:stage2:" + job_id, 86400)
     q.enqueue(runner.run_experiment, job_id, music, voice, slug, max(10, min(240, int(seconds or 45))),
-              song_one.strip() or music, song_two.strip() or voice, job_timeout=3600)
+              song_one.strip() or music, song_two.strip() or voice,
+              max(0.0, float(music_start or 0)), max(0.0, float(voice_start or 0)), job_timeout=3600)
     return job_id
 
 
@@ -326,7 +327,8 @@ async def start_run(project: str = Form(...), song_one: str = Form(""), song_two
 async def import_project(project: str = Form(...), song_one: str = Form(""), song_two: str = Form(""),
                          seconds: int = Form(45), source: str = Form("smash director"),
                          instrumental: UploadFile = File(None), acapella: UploadFile = File(None),
-                         instrumental_url: str = Form(""), acapella_url: str = Form("")):
+                         instrumental_url: str = Form(""), acapella_url: str = Form(""),
+                         music_start: float = Form(0.0), voice_start: float = Form(0.0)):
     """Start a project from another app: send the music and voice as files or as links."""
     if instrumental is None and not instrumental_url:
         raise HTTPException(400, "send instrumental as a file or instrumental_url as a link")
@@ -339,6 +341,6 @@ async def import_project(project: str = Form(...), song_one: str = Form(""), son
     music = await save_part(slug, "music", stamp, upload=instrumental, url=instrumental_url)
     voice = await save_part(slug, "voice", stamp, upload=acapella, url=acapella_url)
     ensure_project(project)
-    job = queue_experiment(slug, music, voice, seconds, song_one, song_two, source[:40])
+    job = queue_experiment(slug, music, voice, seconds, song_one, song_two, source[:40], music_start, voice_start)
     return {"project": slug, "job": job,
             "open": "https://smash-bender.167-233-137-169.sslip.io/?project=" + slug}
