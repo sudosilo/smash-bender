@@ -14,10 +14,25 @@ secs = sys.argv[5] if len(sys.argv) > 5 else "45"
 os.makedirs(out, exist_ok=True)
 SR = 44100
 
+voice_path = os.path.join(base, "jobs", sys.argv[1], "acapella.wav")
+levels = []
+if os.path.exists(voice_path):
+    voice, vsr = sf.read(voice_path)
+    if voice.ndim > 1:
+        voice = voice.mean(1)
+    for n in notes:
+        seg = voice[int(n["start"] * vsr):max(int(n["start"] * vsr) + 1, int(n["end"] * vsr))]
+        levels.append(float(np.sqrt(np.mean(seg ** 2))) if len(seg) else 0.0)
+lo, hi = (np.percentile(levels, 5), np.percentile(levels, 95)) if levels else (0, 1)
+
 pm = pretty_midi.PrettyMIDI()
 track = pretty_midi.Instrument(program=program)
-for n in notes:
-    vel = int(np.clip(50 + 77 * n.get("amp", 0.7), 40, 127))
+for i, n in enumerate(notes):
+    if levels and hi > lo:
+        loud = float(np.clip((levels[i] - lo) / (hi - lo), 0, 1))
+        vel = int(35 + 92 * loud ** 0.7)
+    else:
+        vel = int(np.clip(50 + 77 * n.get("amp", 0.7), 40, 127))
     track.notes.append(pretty_midi.Note(velocity=vel, pitch=int(n["midi"]), start=n["start"], end=n["end"]))
 pm.instruments.append(track)
 mid = os.path.join(out, "melody.mid")
