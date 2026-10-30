@@ -115,6 +115,10 @@ def fetch_urls(spec, job, label, need_inst, seconds=0):
                 grab(spec["url"], src, seconds)
         demucs(d, src, job, label)
     else:
+        if spec.get("vocals_file") and not os.path.exists(voc):
+            trim(spec["vocals_file"], voc, seconds)
+        if spec.get("instrumental_file") and not os.path.exists(inst):
+            trim(spec["instrumental_file"], inst, seconds)
         if spec.get("vocals_url") and not os.path.exists(voc):
             grab(spec["vocals_url"], voc, seconds)
         if spec.get("instrumental_url") and not os.path.exists(inst):
