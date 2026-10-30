@@ -3,7 +3,8 @@ import numpy as np
 import soundfile as sf
 import essentia.standard as es
 
-# usage: experiment.py INSTRUMENTAL_FILE ACAPELLA_FILE NAME [SECONDS] [MAX_RUNS]   (lab python)
+# usage: experiment.py INSTRUMENTAL_FILE ACAPELLA_FILE NAME [SECONDS] [MAX_RUNS] [SONG_ONE_LABEL] [SONG_TWO_LABEL]
+# (lab python) NAME is letters and digits only.
 # Runs up to MAX_RUNS (cap 4) versions of song two's a cappella over song one's instrumental,
 # each testing one idea, checks every result, and logs hypothesis, change, measurements and notes.
 BASE = "/opt/smash-bender"
@@ -11,6 +12,9 @@ INBOX = BASE + "/data/inbox"
 inst_file, acap_file, name = sys.argv[1], sys.argv[2], sys.argv[3]
 secs = float(sys.argv[4]) if len(sys.argv) > 4 else 45.0
 runs = min(4, int(sys.argv[5]) if len(sys.argv) > 5 else 4)
+song_one = sys.argv[6] if len(sys.argv) > 6 else inst_file
+song_two = sys.argv[7] if len(sys.argv) > 7 else acap_file
+stamp = time.strftime("%m%d%H%M")
 SR = 44100
 work = os.path.join(BASE, "data", "experiments", name)
 os.makedirs(work, exist_ok=True)
@@ -125,7 +129,8 @@ for i, v in enumerate(VARIANTS, 1):
     vl = float(np.sqrt(np.mean(loud ** 2))) if len(loud) else 1e-3
     mix = inst + (vv * il * 1.4 / vl)[:, None]
     mix /= max(1.0, float(np.max(np.abs(mix)))) / 0.98
-    out_dir = os.path.join(BASE, "data", "jobs", "%s%d" % (name, i))
+    folder = "%s%s%d" % (name, stamp, i)
+    out_dir = os.path.join(BASE, "data", "jobs", folder)
     os.makedirs(out_dir, exist_ok=True)
     tmp = os.path.join(out_dir, "mix.wav")
     sf.write(tmp, mix, SR)
@@ -150,11 +155,15 @@ for i, v in enumerate(VARIANTS, 1):
         notes.append("Voice stretched to %.0f%% of its length to match %.0f BPM." % (ratio * 100, A_inst["bpm"]))
     if v["align"]:
         notes.append("First word moved %+.2f seconds onto a beat." % shift)
-    rec = {"time": time.strftime("%Y-%m-%d %H:%M"), "experiment": name, "run": i, "label": v["label"],
+    rec = {"time": time.strftime("%Y-%m-%d %H:%M"), "batch": stamp, "experiment": name, "run": i,
+           "sample": "ABCD"[i - 1], "label": v["label"], "song_one": song_one, "song_two": song_two,
+           "music_key": "%s %s" % (A_inst["key"], A_inst["scale"]), "music_bpm": A_inst["bpm"],
+           "voice_key": "%s %s" % (A_acap["key"], A_acap["scale"]), "voice_bpm": A_acap["bpm"],
            "hypothesis": v["hypothesis"], "words_understood_pct": heard["understood_pct"],
            "sounds_like_music_pct": music_like, "sounds_like_voice_pct": voice_like,
            "both_recognizable_pct": both, "notes": " ".join(notes), "heard": heard["heard"],
-           "listen": "smash-bender.167-233-137-169.sslip.io/files/%s%d/mix.mp3" % (name, i)}
+           "audio": "/files/%s/mix.mp3" % folder,
+           "listen": "smash-bender.167-233-137-169.sslip.io/files/%s/mix.mp3" % folder}
     results.append(rec)
     open(log_path, "a").write(json.dumps(rec) + "\n")
     print("\nRUN %d %s | words %.1f%% | music %s%% | voice %s%% | both %s%%" % (
