@@ -75,6 +75,25 @@ header p { margin: 0; color: var(--muted); max-width: 60ch; }
 .sheet p { margin: 0; font-size: 0.95rem; line-height: 1.45; max-height: 40vh; overflow-y: auto; }
 .sheet .close { all: unset; cursor: pointer; position: absolute; top: 8px; right: 10px; font-size: 1.6rem; line-height: 1; padding: 4px 8px; border-radius: 8px; }
 .sheet .close:focus-visible { outline: 3px solid var(--cobalt); }
+.projbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 16px; }
+.projbar label { font-weight: 700; font-size: 0.9rem; }
+.projbar select { font: inherit; padding: 7px 10px; border-radius: 10px; border: 2px solid var(--line); background: var(--panel); color: var(--ink); max-width: 100%; }
+.act { all: unset; cursor: pointer; padding: 8px 12px; border-radius: 10px; font-weight: 700; font-size: 0.9rem; border: 2px solid var(--ink); }
+.act.primary { background: var(--cobalt); border-color: var(--cobalt); color: #fff; }
+.act:focus-visible { outline: 3px solid var(--cobalt); outline-offset: 2px; }
+.act[disabled] { opacity: 0.6; cursor: default; }
+.panel { position: fixed; left: 12px; right: 12px; top: calc(12px + env(safe-area-inset-top, 0px)); z-index: 30;
+  max-width: 520px; margin: 0 auto; max-height: calc(100% - 24px); overflow-y: auto; background: var(--panel);
+  border: 2px solid var(--ink); border-radius: 14px; padding: 16px; box-shadow: 0 10px 30px rgba(20, 32, 43, 0.25); }
+.panel[hidden] { display: none; }
+.panel h3 { font: 800 1.2rem/1.2 var(--head); margin: 0 36px 10px 0; }
+.panel label { display: block; font-weight: 700; font-size: 0.9rem; margin: 12px 0 4px; }
+.panel small { display: block; color: var(--muted); font-size: 0.8rem; }
+.panel input[type=text], .panel input[type=number] { width: 100%; font: inherit; padding: 8px 10px; border: 2px solid var(--line); border-radius: 10px; }
+.panel input[type=file] { width: 100%; font-size: 0.9rem; }
+.panel .row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+.panel .msg { margin-top: 10px; font-size: 0.9rem; color: var(--warm); min-height: 1.2em; }
+.panel .close { all: unset; cursor: pointer; position: absolute; top: 8px; right: 10px; font-size: 1.6rem; line-height: 1; padding: 4px 8px; border-radius: 8px; }
 .pending { background: #fff8ec; border: 1px solid #f0d9b5; border-radius: 12px; padding: 10px 14px; margin-top: 16px; font-size: 0.9rem; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -84,6 +103,12 @@ header p { margin: 0; color: var(--muted); max-width: 60ch; }
   <header>
     <h1>Sample log</h1>
     <p>Every test run, newest first. Tap a lettered pad to play it, rate it, and watch the trend to see if changes help or hurt.</p>
+    <div class="projbar">
+      <label for="project">Project</label>
+      <select id="project"></select>
+      <button class="act" id="newproj">New project</button>
+      <button class="act primary" id="startexp">Start experiment</button>
+    </div>
     <div class="tabs" role="tablist" id="tabs"></div>
   </header>
   <section class="trend" aria-label="Progress over time">
@@ -97,6 +122,33 @@ header p { margin: 0; color: var(--muted); max-width: 60ch; }
   <button class="close" id="sheetclose" aria-label="Close comments">×</button>
   <h3 id="sheettitle"></h3>
   <p id="sheettext"></p>
+</div>
+<div class="panel" id="projpanel" role="dialog" aria-labelledby="projtitle" hidden>
+  <button class="close" data-closes="projpanel" aria-label="Close">×</button>
+  <h3 id="projtitle">New project</h3>
+  <label for="projname">Project name</label>
+  <input type="text" id="projname" placeholder="My first mashup" maxlength="60">
+  <small>A new project starts with a clean slate. Older projects stay in the list.</small>
+  <div class="row"><button class="act primary" id="projcreate">Create project</button></div>
+  <div class="msg" id="projmsg"></div>
+</div>
+<div class="panel" id="exppanel" role="dialog" aria-labelledby="exptitle" hidden>
+  <button class="close" data-closes="exppanel" aria-label="Close">×</button>
+  <h3 id="exptitle">Start experiment</h3>
+  <small id="expproj"></small>
+  <label for="musicfile">Music track (instrumental)</label>
+  <input type="file" id="musicfile" accept="audio/*,.webm,.opus,.m4a,.mp3,.wav,.audio">
+  <label for="musiclabel">Music artist and song</label>
+  <input type="text" id="musiclabel" placeholder="Artist, song title" maxlength="80">
+  <label for="voicefile">Voice track (a cappella)</label>
+  <input type="file" id="voicefile" accept="audio/*,.webm,.opus,.m4a,.mp3,.wav,.audio">
+  <label for="voicelabel">Voice artist and song</label>
+  <input type="text" id="voicelabel" placeholder="Artist, song title" maxlength="80">
+  <label for="seconds">How many seconds from the start</label>
+  <input type="number" id="seconds" value="45" min="10" max="240">
+  <small>Makes 4 samples (untouched, key matched, tempo matched, both) in about 3 to 5 minutes.</small>
+  <div class="row"><button class="act primary" id="expgo">Upload and start</button></div>
+  <div class="msg" id="expmsg"></div>
 </div>
 <audio id="player" preload="none"></audio>
 <script>
@@ -125,6 +177,9 @@ function drawTrend(batches) {
 
 let stage = 1;
 let data1 = [], data2 = { sets: [], pending: [] };
+let project = "";
+let projects = [];
+try { project = localStorage.getItem("sbProject") || ""; } catch (err) {}
 
 function padsHtml(b, sendable) {
   const best = Math.max(...b.samples.map(s => s.both_recognizable_pct || 0));
@@ -166,12 +221,20 @@ function setHtml(b, sendable, from) {
 }
 
 function drawTabs() {
-  const top = Math.max(2, ...data2.sets.map(b => b.stage_num || 2), ...data2.pending.map(p => +p.stage || 2));
+  const top = Math.max(1, ...data2.sets.map(b => b.stage_num || 2), ...data2.pending.map(p => +p.stage || 2));
   let html = "";
   for (let n = 1; n <= top; n++) {
     html += `<button role="tab" id="tab${n}" aria-selected="${n === stage}">Stage ${n}${n === 1 ? ": placing the voice" : ""}</button>`;
   }
   document.getElementById("tabs").innerHTML = html;
+}
+
+function pendingHtml(st) {
+  return data2.pending.filter(p => (+p.stage || 2) === st).map(p => `<div class="pending">${p.status === "error"
+      ? esc(p.tool_name || "This") + " run failed: " + esc(p.error || "unknown error") + ". Try again."
+      : p.tool === "experiment"
+        ? "New experiment started at " + esc(p.time) + ": " + esc(p.progress) + ". The 4 samples appear here when it finishes."
+        : esc(p.tool_name || "Processing") + " is working on sample " + esc(String.fromCharCode(64 + (+p.run || 1))) + ", sent at " + esc(p.time) + ": " + esc(p.progress) + "."}</div>`).join("");
 }
 
 function render() {
@@ -180,15 +243,14 @@ function render() {
   if (current) { player.pause(); current = null; }
   if (stage === 1) {
     drawTrend(data1);
-    list.innerHTML = data1.length ? data1.map(b => setHtml(b, true, "")).join("")
-      : '<p class="empty">No runs yet. Start an experiment on the server and it shows up here.</p>';
+    const pend = pendingHtml(1);
+    list.innerHTML = pend + (data1.length ? data1.map(b => setHtml(b, true, "")).join("")
+      : (pend ? "" : '<p class="empty">No samples in this project yet. Tap Start experiment to upload a music track and a voice track.</p>'));
     return;
   }
   const sets = data2.sets.filter(b => (b.stage_num || 2) === stage);
   drawTrend(sets);
-  const pend = data2.pending.filter(p => (+p.stage || 2) === stage).map(p => `<div class="pending">${p.status === "error"
-      ? esc(p.tool_name || "This") + " run failed: " + esc(p.error || "unknown error") + ". Send the sample again to retry."
-      : esc(p.tool_name || "Processing") + " is working on sample " + esc(String.fromCharCode(64 + (+p.run || 1))) + " from the " + esc((p.key || "").split("|").slice(-2, -1)[0] || "") + " set, sent at " + esc(p.time) + ": " + esc(p.progress) + "."}</div>`).join("");
+  const pend = pendingHtml(stage);
   const prev = stage - 1;
   list.innerHTML = pend + (sets.length ? sets.map(b => setHtml(b, true,
       `${esc(b.stage_name)}, made from stage ${prev} sample ${esc(b.parent_sample)} (${esc(b.parent_tool ? b.parent_tool + ", " : "")}${esc(b.parent_label)}) of the ${esc(b.parent_time)} set.`)).join("")
@@ -249,7 +311,7 @@ document.addEventListener("click", async e => {
     } catch (err) { star.parentElement.insertAdjacentHTML("afterend", '<div class="notes">Rating not saved. Check the connection and tap again.</div>'); }
   }
 });
-document.addEventListener("keydown", e => { if (e.key === "Escape") document.getElementById("sheet").hidden = true; });
+document.addEventListener("keydown", e => { if (e.key === "Escape") ["sheet", "projpanel", "exppanel"].forEach(id => document.getElementById(id).hidden = true); });
 player.addEventListener("playing", () => current && (current.querySelector(".state").textContent = "Playing, tap the letter to pause"));
 player.addEventListener("pause", () => current && (current.querySelector(".state").textContent = "Paused"));
 player.addEventListener("ended", () => { if (current) { current.classList.remove("playing"); current.querySelector(".state").textContent = "Finished"; } });
@@ -258,13 +320,100 @@ player.addEventListener("timeupdate", () => {
 });
 
 async function loadStage2() {
-  try { const r = await fetch("/api/stage2"); if (r.ok) data2 = await r.json(); } catch (err) {}
+  try { const r = await fetch("/api/stage2?project=" + encodeURIComponent(project)); if (r.ok) data2 = await r.json(); } catch (err) {}
 }
-loadStage2().then(() => fetch("/api/experiments")).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
-  .then(d => { data1 = d; render(); })
-  .catch(() => { document.getElementById("list").innerHTML = '<p class="err">The run list did not load. Reload the page; if it keeps failing, the server is restarting or down.</p>'; });
+async function loadAll() {
+  try {
+    const pr = await fetch("/api/projects");
+    projects = pr.ok ? await pr.json() : [];
+    if (!projects.some(p => p.slug === project)) project = projects.length ? projects[0].slug : "";
+    document.getElementById("project").innerHTML = projects.length
+      ? projects.map(p => `<option value="${esc(p.slug)}" ${p.slug === project ? "selected" : ""}>${esc(p.name)}</option>`).join("")
+      : '<option value="">No projects yet</option>';
+    await loadStage2();
+    const r = await fetch("/api/experiments?project=" + encodeURIComponent(project));
+    if (!r.ok) throw new Error(r.status);
+    data1 = await r.json();
+    render();
+  } catch (err) {
+    document.getElementById("list").innerHTML = '<p class="err">The run list did not load. Reload the page; if it keeps failing, the server is restarting or down.</p>';
+  }
+}
+document.getElementById("project").addEventListener("change", e => {
+  project = e.target.value;
+  try { localStorage.setItem("sbProject", project); } catch (err) {}
+  stage = 1;
+  loadAll();
+});
+function openPanel(id) { document.getElementById(id).hidden = false; }
+document.getElementById("newproj").addEventListener("click", () => {
+  document.getElementById("projmsg").textContent = "";
+  openPanel("projpanel");
+  document.getElementById("projname").focus();
+});
+document.getElementById("startexp").addEventListener("click", () => {
+  const p = projects.find(x => x.slug === project);
+  if (!p) { document.getElementById("projmsg").textContent = "Make a project first."; openPanel("projpanel"); return; }
+  document.getElementById("expproj").textContent = "Project: " + p.name;
+  document.getElementById("expmsg").textContent = "";
+  openPanel("exppanel");
+});
+document.addEventListener("click", e => {
+  const c = e.target.closest("[data-closes]");
+  if (c) document.getElementById(c.dataset.closes).hidden = true;
+});
+document.getElementById("projcreate").addEventListener("click", async () => {
+  const name = document.getElementById("projname").value.trim();
+  const msg = document.getElementById("projmsg");
+  if (!name) { msg.textContent = "Type a name first."; return; }
+  try {
+    const r = await fetch("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }) });
+    const d = await r.json();
+    if (!r.ok) { msg.textContent = d.detail || "Could not create it."; return; }
+    project = d.slug;
+    try { localStorage.setItem("sbProject", project); } catch (err) {}
+    document.getElementById("projpanel").hidden = true;
+    document.getElementById("projname").value = "";
+    stage = 1;
+    await loadAll();
+  } catch (err) { msg.textContent = "Could not reach the server. Try again."; }
+});
+document.getElementById("expgo").addEventListener("click", async () => {
+  const go = document.getElementById("expgo");
+  const msg = document.getElementById("expmsg");
+  const music = document.getElementById("musicfile").files[0];
+  const voice = document.getElementById("voicefile").files[0];
+  if (!music || !voice) { msg.textContent = "Pick both a music track and a voice track."; return; }
+  const fd = new FormData();
+  fd.append("project", project);
+  fd.append("song_one", document.getElementById("musiclabel").value);
+  fd.append("song_two", document.getElementById("voicelabel").value);
+  fd.append("seconds", document.getElementById("seconds").value || "45");
+  fd.append("instrumental", music);
+  fd.append("acapella", voice);
+  go.disabled = true;
+  msg.textContent = "Uploading";
+  try {
+    const r = await fetch("/api/run", { method: "POST", body: fd });
+    const d = await r.json();
+    if (!r.ok) { msg.textContent = d.detail || "Upload failed."; go.disabled = false; return; }
+    document.getElementById("exppanel").hidden = true;
+    go.disabled = false;
+    stage = 1;
+    await loadAll();
+  } catch (err) { msg.textContent = "Upload did not finish. Check the connection and try again."; go.disabled = false; }
+});
+loadAll();
 setInterval(async () => {
-  if (stage > 1 && (!current || player.paused)) { await loadStage2(); render(); }
+  if (!current || player.paused) {
+    const hadWork = data2.pending.some(p => p.status !== "error");
+    await loadStage2();
+    if (hadWork && stage === 1) {
+      const r = await fetch("/api/experiments?project=" + encodeURIComponent(project));
+      if (r.ok) data1 = await r.json();
+    }
+    render();
+  }
 }, 20000);
 </script>
 </body>
