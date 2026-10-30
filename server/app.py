@@ -9,6 +9,7 @@ import pipeline
 import stage2
 import runner
 import re
+import requests
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -256,32 +257,88 @@ async def new_project(req: Request):
     return {"slug": slug}
 
 
+def ensure_project(name):
+    slug = re.sub(r"[^a-z0-9]", "", (name or "").lower())[:40]
+    if not slug:
+        raise HTTPException(400, "give the project a name with letters or numbers")
+    known = load_projects()
+    if slug not in known:
+        known[slug] = {"name": name.strip(), "created": time.strftime("%Y-%m-%d %H:%M")}
+        os.makedirs(EXP, exist_ok=True)
+        json.dump(known, open(PROJECTS, "w"))
+    return slug
+
+
+async def save_part(slug, part, stamp, upload=None, url=""):
+    inbox = os.path.join(pipeline.DATA, "inbox")
+    os.makedirs(inbox, exist_ok=True)
+    source = (upload.filename if upload is not None else url.split("?")[0]) or ""
+    ext = re.sub(r"[^a-z0-9]", "", os.path.splitext(source)[1].lower())[:5] or "audio"
+    fname = "%s_%s_%s.%s" % (slug, part, stamp, ext)
+    path = os.path.join(inbox, fname)
+    if upload is not None:
+        with open(path, "wb") as fh:
+            while True:
+                chunk = await upload.read(1 << 20)
+                if not chunk:
+                    break
+                fh.write(chunk)
+    else:
+        if not url.startswith(("http://", "https://")):
+            raise HTTPException(400, "the %s link must start with http or https" % part)
+        try:
+            with requests.get(url, headers=pipeline.BROWSER, stream=True, timeout=120) as res:
+                res.raise_for_status()
+                with open(path, "wb") as fh:
+                    for chunk in res.iter_content(1 << 16):
+                        fh.write(chunk)
+        except requests.RequestException as e:
+            raise HTTPException(400, "could not download the %s track: %s" % (part, str(e)[:120]))
+    if os.path.getsize(path) < 1000:
+        raise HTTPException(400, "the %s track is empty or too small" % part)
+    return fname
+
+
+def queue_experiment(slug, music, voice, seconds, song_one, song_two, source):
+    job_id = uuid.uuid4().hex[:8]
+    r.hset("sb:stage2:" + job_id, mapping={"status": "queued", "progress": "waiting", "key": slug + "|new",
+                                            "run": "0", "tool": "experiment", "tool_name": "New experiment",
+                                            "stage": "1", "time": time.strftime("%Y-%m-%d %H:%M"), "source": source})
+    r.expire("sb:stage2:" + job_id, 86400)
+    q.enqueue(runner.run_experiment, job_id, music, voice, slug, max(10, min(240, int(seconds or 45))),
+              song_one.strip() or music, song_two.strip() or voice, job_timeout=3600)
+    return job_id
+
+
 @app.post("/api/run")
 async def start_run(project: str = Form(...), song_one: str = Form(""), song_two: str = Form(""),
                     seconds: int = Form(45), instrumental: UploadFile = File(...), acapella: UploadFile = File(...)):
     slug = re.sub(r"[^a-z0-9]", "", project.lower())
     if not slug:
         raise HTTPException(400, "pick a project first")
-    seconds = max(10, min(240, int(seconds or 45)))
-    inbox = os.path.join(pipeline.DATA, "inbox")
-    os.makedirs(inbox, exist_ok=True)
     stamp = time.strftime("%m%d%H%M%S")
-    names = []
-    for up, part in ((instrumental, "music"), (acapella, "voice")):
-        ext = re.sub(r"[^a-z0-9]", "", os.path.splitext(up.filename or "")[1].lower())[:5] or "audio"
-        fname = "%s_%s_%s.%s" % (slug, part, stamp, ext)
-        with open(os.path.join(inbox, fname), "wb") as fh:
-            while True:
-                chunk = await up.read(1 << 20)
-                if not chunk:
-                    break
-                fh.write(chunk)
-        names.append(fname)
-    job_id = uuid.uuid4().hex[:8]
-    r.hset("sb:stage2:" + job_id, mapping={"status": "queued", "progress": "waiting", "key": slug + "|new",
-                                            "run": "0", "tool": "experiment", "tool_name": "New experiment",
-                                            "stage": "1", "time": time.strftime("%Y-%m-%d %H:%M")})
-    r.expire("sb:stage2:" + job_id, 86400)
-    q.enqueue(runner.run_experiment, job_id, names[0], names[1], slug, seconds,
-              song_one.strip() or names[0], song_two.strip() or names[1], job_timeout=3600)
-    return {"job": job_id}
+    music = await save_part(slug, "music", stamp, upload=instrumental)
+    voice = await save_part(slug, "voice", stamp, upload=acapella)
+    return {"job": queue_experiment(slug, music, voice, seconds, song_one, song_two, "page")}
+
+
+@app.post("/api/import")
+async def import_project(project: str = Form(...), song_one: str = Form(""), song_two: str = Form(""),
+                         seconds: int = Form(45), source: str = Form("smash director"),
+                         instrumental: UploadFile = File(None), acapella: UploadFile = File(None),
+                         instrumental_url: str = Form(""), acapella_url: str = Form("")):
+    """Start a project from another app: send the music and voice as files or as links."""
+    if instrumental is None and not instrumental_url:
+        raise HTTPException(400, "send instrumental as a file or instrumental_url as a link")
+    if acapella is None and not acapella_url:
+        raise HTTPException(400, "send acapella as a file or acapella_url as a link")
+    slug = re.sub(r"[^a-z0-9]", "", (project or "").lower())[:40]
+    if not slug:
+        raise HTTPException(400, "give the project a name with letters or numbers")
+    stamp = time.strftime("%m%d%H%M%S")
+    music = await save_part(slug, "music", stamp, upload=instrumental, url=instrumental_url)
+    voice = await save_part(slug, "voice", stamp, upload=acapella, url=acapella_url)
+    ensure_project(project)
+    job = queue_experiment(slug, music, voice, seconds, song_one, song_two, source[:40])
+    return {"project": slug, "job": job,
+            "open": "https://smash-bender.167-233-137-169.sslip.io/?project=" + slug}
