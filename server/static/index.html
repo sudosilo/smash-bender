@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<title>Sample log</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #e9eef2; --panel: #ffffff; --ink: #14202b; --muted: #586573; --line: #cdd6de;
+  --cobalt: #1f5fd6; --good: #1d8457; --warm: #b8480f; --pad: #f4f7fa;
+  --head: "Bricolage Grotesque", "Arial Narrow", Arial, sans-serif;
+  --body: "Atkinson Hyperlegible", Verdana, Arial, sans-serif;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); color: var(--ink); font: 16px/1.5 var(--body);
+  padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+body { margin: 0; }
+main { max-width: 760px; margin: 0 auto; padding: 20px 16px 48px; }
+header h1 { font: 800 clamp(2.2rem, 9vw, 3.4rem)/0.95 var(--head); letter-spacing: -0.02em; margin: 8px 0 6px; }
+header p { margin: 0; color: var(--muted); max-width: 60ch; }
+.trend { margin: 22px 0 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+.trend h2 { font: 500 1.05rem/1.2 var(--head); margin: 0 0 8px; }
+.trend svg { width: 100%; height: 90px; display: block; }
+.trend small { color: var(--muted); }
+.batch { margin-top: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+.when { color: var(--muted); font-size: 0.9rem; }
+.songs { margin: 4px 0 14px; }
+.songs div { font: 500 1.15rem/1.3 var(--head); }
+.songs span { color: var(--muted); font: 400 0.9rem/1.3 var(--body); }
+.pads { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+@media (min-width: 640px) { .pads { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.pad { background: var(--pad); border: 2px solid var(--line); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.pad.best { border-color: var(--good); }
+.pad.playing { border-color: var(--cobalt); background: #edf3ff; }
+.hit { all: unset; cursor: pointer; display: flex; align-items: baseline; gap: 8px; border-radius: 8px; }
+.hit:focus-visible { outline: 3px solid var(--cobalt); outline-offset: 2px; }
+.letter { font: 800 2.6rem/1 var(--head); }
+.what { font-size: 0.9rem; line-height: 1.25; }
+.state { font-size: 0.8rem; color: var(--cobalt); min-height: 1.2em; }
+.besttag { font-size: 0.8rem; color: var(--good); font-weight: 700; }
+.bar { font-size: 0.78rem; color: var(--muted); }
+.bar i { display: block; height: 6px; border-radius: 3px; background: var(--line); margin-top: 2px; overflow: hidden; }
+.bar i b { display: block; height: 100%; background: var(--cobalt); }
+.bar.both i b { background: var(--good); }
+.notes { font-size: 0.82rem; color: var(--muted); line-height: 1.35; }
+.stars { display: flex; gap: 2px; }
+.stars button { all: unset; cursor: pointer; font-size: 1.25rem; line-height: 1; color: var(--line); padding: 2px; border-radius: 4px; }
+.stars button.on { color: var(--warm); }
+.stars button:focus-visible { outline: 2px solid var(--cobalt); }
+.seek { width: 100%; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.seek b { display: block; height: 100%; width: 0; background: var(--cobalt); }
+.empty, .err { margin-top: 24px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Sample log</h1>
+    <p>Every test run, newest first. Tap a lettered pad to play it, rate it, and watch the trend to see if changes help or hurt.</p>
+  </header>
+  <section class="trend" aria-label="Progress over time">
+    <h2>Best result per run set</h2>
+    <svg id="trend" viewBox="0 0 300 90" preserveAspectRatio="none" role="img" aria-label="Best both recognizable score per run set over time"></svg>
+    <small id="trendnote"></small>
+  </section>
+  <div id="list"></div>
+</main>
+<audio id="player" preload="none"></audio>
+<script>
+const player = document.getElementById("player");
+let current = null;
+
+function pct(v) { return v == null ? "n/a" : Math.round(v) + "%"; }
+function bar(label, v, cls) {
+  const w = Math.max(0, Math.min(100, v || 0));
+  return `<div class="bar ${cls || ""}">${label} ${pct(v)}<i><b style="width:${w}%"></b></i></div>`;
+}
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+
+function drawTrend(batches) {
+  const pts = batches.slice().reverse().map(b => Math.max(...b.samples.map(s => s.both_recognizable_pct || 0)));
+  const svg = document.getElementById("trend");
+  const note = document.getElementById("trendnote");
+  if (pts.length < 2) { svg.innerHTML = ""; note.textContent = "The trend line appears after a second run set."; return; }
+  const hi = Math.max(60, ...pts);
+  const xy = pts.map((p, i) => [5 + i * 290 / (pts.length - 1), 85 - p / hi * 80]);
+  svg.innerHTML = `<polyline fill="none" stroke="#1d8457" stroke-width="2.5" vector-effect="non-scaling-stroke" points="${xy.map(p => p.join(",")).join(" ")}"/>` +
+    xy.map(p => `<circle cx="${p[0]}" cy="${p[1]}" r="3.5" fill="#1d8457"/>`).join("");
+  const d = pts[pts.length - 1] - pts[pts.length - 2];
+  note.textContent = `Latest best ${pct(pts[pts.length - 1])}, ${d >= 0 ? "up" : "down"} ${Math.abs(Math.round(d))} point${Math.abs(Math.round(d)) === 1 ? "" : "s"} from the set before.`;
+}
+
+function render(batches) {
+  const list = document.getElementById("list");
+  drawTrend(batches);
+  if (!batches.length) { list.innerHTML = '<p class="empty">No runs yet. Start an experiment on the server and it shows up here.</p>'; return; }
+  list.innerHTML = batches.map(b => {
+    const best = Math.max(...b.samples.map(s => s.both_recognizable_pct || 0));
+    const pads = b.samples.map(s => `
+      <div class="pad ${s.both_recognizable_pct === best ? "best" : ""}" data-audio="${esc(s.audio)}">
+        <button class="hit" aria-label="Play sample ${esc(s.sample)}, ${esc(s.label)}">
+          <span class="letter">${esc(s.sample)}</span><span class="what">${esc(s.label)}</span>
+        </button>
+        <div class="seek"><b></b></div>
+        <div class="state"></div>
+        ${s.both_recognizable_pct === best ? '<div class="besttag">Best in set</div>' : ""}
+        ${bar("Words heard", s.words_understood_pct)}
+        ${bar("Music", s.sounds_like_music_pct)}
+        ${bar("Voice", s.sounds_like_voice_pct)}
+        ${bar("Both", s.both_recognizable_pct, "both")}
+        <div class="notes">${esc(s.notes)}</div>
+        <div class="stars" role="group" aria-label="Rate sample ${esc(s.sample)}">
+          ${[1,2,3,4,5].map(n => `<button data-key="${esc(b.key)}" data-run="${s.run}" data-stars="${n}" class="${n <= (s.rating || 0) ? "on" : ""}" aria-label="${n} star${n > 1 ? "s" : ""}">\u2605</button>`).join("")}
+        </div>
+      </div>`).join("");
+    return `<article class="batch">
+      <div class="when">${esc(b.time)}</div>
+      <div class="songs">
+        <div>${esc(b.song_one)} <span>music${b.music_key ? ", " + esc(b.music_key) + ", " + Math.round(b.music_bpm) + " BPM" : ""}</span></div>
+        <div>${esc(b.song_two)} <span>voice${b.voice_key ? ", " + esc(b.voice_key) + ", " + Math.round(b.voice_bpm) + " BPM" : ""}</span></div>
+      </div>
+      <div class="pads">${pads}</div>
+    </article>`;
+  }).join("");
+}
+
+document.addEventListener("click", async e => {
+  const hit = e.target.closest(".hit");
+  if (hit) {
+    const pad = hit.closest(".pad");
+    if (current === pad && !player.paused) { player.pause(); return; }
+    if (current) { current.classList.remove("playing"); current.querySelector(".state").textContent = ""; }
+    current = pad;
+    player.src = pad.dataset.audio;
+    pad.classList.add("playing");
+    pad.querySelector(".state").textContent = "Loading";
+    player.play().catch(() => { pad.querySelector(".state").textContent = "This sample could not be loaded."; });
+    return;
+  }
+  const star = e.target.closest(".stars button");
+  if (star) {
+    const n = +star.dataset.stars;
+    star.parentElement.querySelectorAll("button").forEach(b => b.classList.toggle("on", +b.dataset.stars <= n));
+    try {
+      await fetch("/api/rate", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key: star.dataset.key, run: +star.dataset.run, stars: n }) });
+    } catch (err) { star.parentElement.insertAdjacentHTML("afterend", '<div class="notes">Rating not saved. Check the connection and tap again.</div>'); }
+  }
+});
+player.addEventListener("playing", () => current && (current.querySelector(".state").textContent = "Playing, tap the letter to pause"));
+player.addEventListener("pause", () => current && (current.querySelector(".state").textContent = "Paused"));
+player.addEventListener("ended", () => { if (current) { current.classList.remove("playing"); current.querySelector(".state").textContent = "Finished"; } });
+player.addEventListener("timeupdate", () => {
+  if (current && player.duration) current.querySelector(".seek b").style.width = (player.currentTime / player.duration * 100) + "%";
+});
+
+fetch("/api/experiments").then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(render)
+  .catch(() => { document.getElementById("list").innerHTML = '<p class="err">The run list did not load. Reload the page; if it keeps failing, the server is restarting or down.</p>'; });
+</script>
+</body>
+</html>

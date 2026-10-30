@@ -4,6 +4,7 @@ from rq import Queue
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+import time
 import pipeline
 
 app = FastAPI()
@@ -86,3 +87,65 @@ def files(job: str, name: str):
     if not os.path.exists(p):
         raise HTTPException(404, "no file")
     return FileResponse(p)
+
+
+EXP = os.path.join(pipeline.DATA, "experiments")
+RATINGS = os.path.join(EXP, "ratings.json")
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+@app.get("/")
+def home():
+    return FileResponse(os.path.join(HERE, "static", "index.html"), media_type="text/html")
+
+
+def load_ratings():
+    try:
+        return json.load(open(RATINGS))
+    except (OSError, ValueError):
+        return {}
+
+
+@app.get("/api/experiments")
+def experiments():
+    batches = {}
+    if os.path.isdir(EXP):
+        for fn in os.listdir(EXP):
+            if not fn.endswith(".jsonl"):
+                continue
+            for line in open(os.path.join(EXP, fn)):
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                key = rec.get("experiment", fn[:-6]) + "|" + rec.get("batch", rec.get("time", "")[:16])
+                batches.setdefault(key, []).append(rec)
+    ratings = load_ratings()
+    out = []
+    for key, recs in batches.items():
+        recs.sort(key=lambda r: r.get("run", 0))
+        for r in recs:
+            r.setdefault("sample", "ABCD"[max(0, min(3, r.get("run", 1) - 1))])
+            r.setdefault("audio", "/files/%s%d/mix.mp3" % (r.get("experiment", ""), r.get("run", 1)))
+            r["rating"] = ratings.get(key + "|" + str(r.get("run")), 0)
+        first = recs[0]
+        out.append({"key": key, "experiment": first.get("experiment"), "time": first.get("time"),
+                    "song_one": first.get("song_one", ""), "song_two": first.get("song_two", ""),
+                    "music_key": first.get("music_key", ""), "music_bpm": first.get("music_bpm"),
+                    "voice_key": first.get("voice_key", ""), "voice_bpm": first.get("voice_bpm"),
+                    "samples": recs})
+    out.sort(key=lambda b: b["time"] or "", reverse=True)
+    return out
+
+
+@app.post("/api/rate")
+async def rate(req: Request):
+    body = await req.json()
+    stars = int(body.get("stars", 0))
+    if not body.get("key") or stars < 0 or stars > 5:
+        raise HTTPException(400, "key and stars 0 to 5 required")
+    ratings = load_ratings()
+    ratings[body["key"] + "|" + str(int(body.get("run", 0)))] = stars
+    os.makedirs(EXP, exist_ok=True)
+    json.dump(ratings, open(RATINGS, "w"))
+    return {"ok": True}
