@@ -1,4 +1,4 @@
-import os, re, json, hashlib, shutil, subprocess
+import os, re, json, hashlib, shutil, subprocess, difflib
 import numpy as np
 import soundfile as sf
 import librosa
@@ -215,6 +215,63 @@ def plan_from_words(target, words, track):
     return items
 
 
+def norm_word(w):
+    return re.sub(r"[^a-z0-9']", "", (w or "").lower())
+
+
+def pair_words(words_a, words_b):
+    ta = [norm_word(w["word"]) for w in words_a]
+    tb = [norm_word(w["word"]) for w in words_b]
+    pairs = []
+    sm = difflib.SequenceMatcher(None, ta, tb, autojunk=False)
+    for op, a0, a1, b0, b1 in sm.get_opcodes():
+        if op == "equal":
+            pairs += [(a0 + k, b0 + k) for k in range(a1 - a0)]
+        elif op == "replace":
+            na, nb = a1 - a0, b1 - b0
+            for k in range(na):
+                pairs.append((a0 + k, b0 + min(nb - 1, k * nb // na)))
+    matched = sum(1 for op, a0, a1, b0, b1 in sm.get_opcodes() if op == "equal" for _ in range(a1 - a0))
+    return pairs, matched
+
+
+def plan_from_alignment(words_a, words_b, notes_a, track_a, track_b):
+    pairs, matched = pair_words(words_a, words_b)
+    items = []
+    fb = mid_pitch(track_b, 0, 10 ** 6) or 60.0
+    for ia, ib in pairs:
+        wa, wb = words_a[ia], words_b[ib]
+        a0, a1 = wa["start"], wa["end"]
+        if a1 - a0 < 0.05 or wb["end"] - wb["start"] < 0.03:
+            continue
+        over = [n for n in notes_a if n["end"] > a0 and n["start"] < a1]
+        if not over:
+            pa = mid_pitch(track_a, a0, a1)
+            pieces = [(a0, a1, pa, 0)]
+        else:
+            pieces = [(max(a0, n["start"]), min(a1, n["end"]), n["midi"], n.get("level", 0)) for n in over]
+            pieces[0] = (a0, pieces[0][1], pieces[0][2], pieces[0][3])
+            pieces[-1] = (pieces[-1][0], a1, pieces[-1][2], pieces[-1][3])
+        total = sum(p1 - p0 for p0, p1, _, _ in pieces) or 1.0
+        cur = wb["start"]
+        span_b = wb["end"] - wb["start"]
+        for k, (p0, p1, midi, level) in enumerate(pieces):
+            if p1 - p0 < 0.02:
+                continue
+            s0 = cur
+            s1 = cur + span_b * (p1 - p0) / total
+            cur = s1
+            sm = mid_pitch(track_b, s0, s1)
+            src = sm if sm is not None else fb
+            items.append({"i": len(items), "start": round(p0, 4), "end": round(p1, 4),
+                          "midi": midi if midi is not None else src, "level": level,
+                          "word": wb["word"] if k == 0 else "",
+                          "src_start": round(s0, 4), "src_end": round(s1, 4), "src_midi": src,
+                          "shift_ms": 0, "semis": 0, "trim_start_ms": 0, "trim_end_ms": 0,
+                          "mute": False})
+    return items, matched
+
+
 def find_notes(path):
     y, _ = librosa.load(path, sr=ASR, mono=True)
     f0, voiced, _ = librosa.pyin(y, fmin=65, fmax=1000, sr=ASR, hop_length=HOP)
@@ -379,8 +436,18 @@ def run_job(job):
         target = find_notes(os.path.join(dir1, "vocals.wav"))
         lyr = fetch_lyrics(dir2, meta["song2"], job, "song two")
         words = word_map(dir2, job, "song two", lyr)
+        lyr1 = fetch_lyrics(dir1, meta["song1"], job, "song one")
+        words1 = word_map(dir1, job, "song one", lyr1)
         set_state(job, progress="reading syllables of song two")
-        if len(words) >= 3:
+        aligned_items, matched = [], 0
+        if len(words) >= 3 and len(words1) >= 3:
+            ta = pitch_track(os.path.join(dir1, "vocals.wav"))
+            tb = pitch_track(os.path.join(dir2, "vocals.wav"))
+            aligned_items, matched = plan_from_alignment(words1, words, target, ta, tb)
+            set_state(job, words_matched=matched, words_song_one=len(words1))
+        if aligned_items and matched >= 0.3 * min(len(words), len(words1)):
+            plan = {"items": aligned_items, "mode": "aligned"}
+        elif len(words) >= 3:
             track = pitch_track(os.path.join(dir2, "vocals.wav"))
             plan = {"items": plan_from_words(target, words, track), "mode": "words"}
         else:
