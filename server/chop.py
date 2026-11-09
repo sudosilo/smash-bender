@@ -41,52 +41,60 @@ def read_notes(path):
     return mel
 
 
-def mini(mel, dur, steps=32):
-    step = dur / steps
-    cells = [None] * steps
+def clean(mel):
+    mel = [dict(n) for n in mel if n["end"] - n["start"] >= 0.07]
+    for i in range(len(mel)):
+        nb = [mel[j]["midi"] for j in (i - 1, i + 1) if 0 <= j < len(mel)]
+        if nb:
+            ref = sum(nb) / len(nb)
+            for shift in (-12, 12):
+                if abs(mel[i]["midi"] + shift - ref) < abs(mel[i]["midi"] - ref) - 6:
+                    mel[i]["midi"] += shift
+    out = []
     for n in mel:
-        a = int(round(n["start"] / step))
-        b = max(a + 1, int(round(n["end"] / step)))
-        if a >= steps:
+        if out and n["midi"] == out[-1]["midi"] and n["start"] - out[-1]["end"] < 0.08:
+            out[-1]["end"] = n["end"]
             continue
-        if cells[a] is None:
-            cells[a] = (name(n["midi"]), min(b, steps) - a)
-    out, i, rest = [], 0, 0
-    while i < steps:
-        c = cells[i]
-        if c is None:
-            rest += 1
-            i += 1
-            continue
-        if rest:
-            out.append("~" if rest == 1 else "~@%d" % rest)
-            rest = 0
-        length = c[1]
-        nxt = next((j for j in range(i + 1, i + length) if cells[j] is not None), i + length)
-        length = nxt - i
-        out.append(c[0] if length == 1 else "%s@%d" % (c[0], length))
-        i += length
-    if rest:
-        out.append("~" if rest == 1 else "~@%d" % rest)
-    return " ".join(out)
+        out.append(n)
+    return out
+
+
+def timed(mel, dur, value):
+    """Mini-notation with each event weighted by its length in hundredths of a second, so timing is exact."""
+    unit, parts, t = 0.01, [], 0.0
+    for n in mel:
+        gap = int(round((n["start"] - t) / unit))
+        if gap > 0:
+            parts.append("~@%d" % gap)
+        length = max(1, int(round((n["end"] - max(n["start"], t)) / unit)))
+        parts.append("%s@%d" % (value(n), length))
+        t = max(t, n["start"]) + length * unit
+    tail = int(round((dur - t) / unit))
+    if tail > 0:
+        parts.append("~@%d" % tail)
+    return " ".join(parts) or "~"
 
 
 mel = read_notes(wav) if os.environ.get("CHOP_FAKE") is None else json.loads(os.environ["CHOP_FAKE"])
+mel = clean(mel)
 if mel:
     w = np.array([n["end"] - n["start"] for n in mel])
     base = name(int(round(np.median(np.repeat([n["midi"] for n in mel], np.maximum(1, (w * 100).astype(int)))))))
 else:
     base = "c3"
-pattern = mini(mel, dur) if mel else "~"
+pattern = timed(mel, dur, lambda n: name(n["midi"])) if mel else "~"
+starts = timed(mel, dur, lambda n: "%.3f" % (n["start"] / dur)) if mel else "~"
 url = public.rstrip("/") + "/slice.mp3"
 code = "\n".join([
-    "// Smash Bender chop: %.2f seconds, %d notes" % (dur, len(mel)),
+    "// Smash Bender chop: %.2f seconds, %d notes, timed to the hundredth of a second" % (dur, len(mel)),
     "samples({ voice: { '%s': '%s' } })" % (base, url),
-    "setcps(%.4f)" % (1.0 / dur),
+    "setcps(%.4f) // one loop = the slice's own length" % (1.0 / dur),
     "const melody = \"%s\"" % pattern,
+    "const starts = \"%s\"" % starts,
     "stack(",
-    "  note(melody).s(\"voice\").clip(1),",
-    "  note(melody).s(\"piano\").gain(0.6)",
+    "  s(\"voice\").clip(1),                    // the slice itself, once per loop",
+    "  note(melody).s(\"piano\").gain(0.7),     // the notes it heard, in time with it",
+    "  // note(melody).s(\"voice\").begin(starts).clip(1),  // remove the // to play each note from its own spot in the voice",
     ")",
 ])
 link = "https://strudel.cc/#" + urllib.parse.quote(base64.b64encode(code.encode()).decode())
