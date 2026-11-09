@@ -111,6 +111,7 @@ header p { margin: 0; color: var(--muted); max-width: 60ch; }
       <select id="project"></select>
       <button class="act" id="newproj">New project</button>
       <button class="act primary" id="startexp">Start experiment</button>
+      <button class="act" id="addclip">Add sound clip</button>
     </div>
     <div class="tabs" role="tablist" id="tabs"></div>
   </header>
@@ -174,7 +175,22 @@ header p { margin: 0; color: var(--muted); max-width: 60ch; }
       <button class="act" id="chopcopy">Copy code</button>
       <a class="act" id="chopdl" download="chop.mp3">Download slice</a>
     </div>
+    <label for="chopname">Name for Strudel</label>
+    <input type="text" id="chopname" placeholder="vocal_ooh" maxlength="40">
+    <div class="row"><button class="act" id="chopsave">Save slice to GitHub</button></div>
+    <small id="chopsaved"></small>
   </div>
+</div>
+<div class="panel" id="clippanel" role="dialog" aria-labelledby="cliptitle" hidden>
+  <button class="close" data-closes="clippanel" aria-label="Close">×</button>
+  <h3 id="cliptitle">Add a sound clip</h3>
+  <small>Puts a recording in the Strudel sample repo on GitHub, so Strudel can play it by name.</small>
+  <label for="clipfile">Recording (mp3, wav, ogg, m4a or flac)</label>
+  <input type="file" id="clipfile" accept=".mp3,.wav,.ogg,.m4a,.flac,audio/*">
+  <label for="clipname">Name for Strudel</label>
+  <input type="text" id="clipname" placeholder="my_take" maxlength="40">
+  <div class="row"><button class="act primary" id="clipgo">Upload to GitHub</button></div>
+  <div class="msg" id="clipmsg"></div>
 </div>
 <audio id="player" preload="none"></audio>
 <script>
@@ -207,6 +223,7 @@ let project = "";
 let projects = [];
 let chopTarget = null;
 let chopCode = "";
+let chopFolder = "";
 try { project = localStorage.getItem("sbProject") || ""; } catch (err) {}
 const linked = new URLSearchParams(location.search).get("project");
 if (linked) { project = linked; try { localStorage.setItem("sbProject", project); } catch (err) {} }
@@ -351,7 +368,7 @@ document.addEventListener("click", async e => {
     } catch (err) { star.parentElement.insertAdjacentHTML("afterend", '<div class="notes">Rating not saved. Check the connection and tap again.</div>'); }
   }
 });
-document.addEventListener("keydown", e => { if (e.key === "Escape") ["sheet", "projpanel", "exppanel", "choppanel"].forEach(id => document.getElementById(id).hidden = true); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") ["sheet", "projpanel", "exppanel", "choppanel", "clippanel"].forEach(id => document.getElementById(id).hidden = true); });
 player.addEventListener("playing", () => current && (current.querySelector(".state").textContent = "Playing, tap the letter to pause"));
 player.addEventListener("pause", () => current && (current.querySelector(".state").textContent = "Paused"));
 player.addEventListener("ended", () => { if (current) { current.classList.remove("playing"); current.querySelector(".state").textContent = "Finished"; } });
@@ -458,6 +475,8 @@ document.getElementById("chopgo").addEventListener("click", async () => {
     if (!r.ok) { msg.textContent = d.detail || "Chop failed."; return; }
     msg.textContent = "";
     chopCode = d.code;
+    chopFolder = d.folder;
+    document.getElementById("chopsaved").textContent = "";
     document.getElementById("chopaudio").src = "/files/" + d.folder + "/slice.mp3";
     document.getElementById("chopdl").href = "/files/" + d.folder + "/slice.mp3";
     document.getElementById("chopstrudel").href = d.strudel;
@@ -468,6 +487,42 @@ document.getElementById("chopgo").addEventListener("click", async () => {
 document.getElementById("chopcopy").addEventListener("click", async () => {
   try { await navigator.clipboard.writeText(chopCode); document.getElementById("chopcopy").textContent = "Copied"; }
   catch (err) { document.getElementById("chopmsg").textContent = "Copy was blocked; use Open in Strudel instead."; }
+});
+async function publishClip(fd, msgEl) {
+  msgEl.textContent = "Saving to GitHub";
+  try {
+    const r = await fetch("/api/publish", { method: "POST", body: fd });
+    const d = await r.json();
+    if (!r.ok) { msgEl.textContent = d.detail || "Save failed."; return null; }
+    msgEl.innerHTML = 'Saved as "' + esc(d.name) + '". In Strudel: <code>' + esc(d.strudel_code).replace(/\n/g, "<br>") + '</code> <a href="' + esc(d.strudel) + '" target="_blank" rel="noopener">Try it in Strudel</a>';
+    return d;
+  } catch (err) { msgEl.textContent = "Could not reach the server. Try again."; return null; }
+}
+document.getElementById("chopsave").addEventListener("click", async () => {
+  const name = document.getElementById("chopname").value.trim();
+  const out = document.getElementById("chopsaved");
+  if (!name) { out.textContent = "Type a name first."; return; }
+  const fd = new FormData();
+  fd.append("name", name);
+  fd.append("folder", chopFolder);
+  await publishClip(fd, out);
+});
+document.getElementById("addclip").addEventListener("click", () => {
+  document.getElementById("clipmsg").textContent = "";
+  openPanel("clippanel");
+});
+document.getElementById("clipgo").addEventListener("click", async () => {
+  const f = document.getElementById("clipfile").files[0];
+  const name = document.getElementById("clipname").value.trim();
+  const msg = document.getElementById("clipmsg");
+  if (!f || !name) { msg.textContent = "Pick a recording and type a name."; return; }
+  const fd = new FormData();
+  fd.append("name", name);
+  fd.append("file", f);
+  const go = document.getElementById("clipgo");
+  go.disabled = true;
+  await publishClip(fd, msg);
+  go.disabled = false;
 });
 loadAll();
 setInterval(async () => {
