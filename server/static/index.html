@@ -89,6 +89,9 @@ header p { margin: 0; color: var(--muted); max-width: 60ch; }
 .panel h3 { font: 800 1.2rem/1.2 var(--head); margin: 0 36px 10px 0; }
 .panel label { display: block; font-weight: 700; font-size: 0.9rem; margin: 12px 0 4px; }
 .panel small { display: block; color: var(--muted); font-size: 0.8rem; }
+.panel select { width: 100%; font: inherit; padding: 8px 10px; border: 2px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); }
+.panel a.act { text-decoration: none; color: var(--ink); }
+.panel a.act.primary { color: #fff; }
 .panel input[type=text], .panel input[type=number] { width: 100%; font: inherit; padding: 8px 10px; border: 2px solid var(--line); border-radius: 10px; }
 .panel input[type=file] { width: 100%; font-size: 0.9rem; }
 .panel .row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
@@ -150,6 +153,29 @@ header p { margin: 0; color: var(--muted); max-width: 60ch; }
   <div class="row"><button class="act primary" id="expgo">Upload and start</button></div>
   <div class="msg" id="expmsg"></div>
 </div>
+<div class="panel" id="choppanel" role="dialog" aria-labelledby="choptitle" hidden>
+  <button class="close" data-closes="choppanel" aria-label="Close">×</button>
+  <h3 id="choptitle">Chop into notes</h3>
+  <small id="chopwhat"></small>
+  <label for="chopstart">Start, seconds into the sample</label>
+  <input type="number" id="chopstart" value="0" min="0" step="0.1">
+  <label for="chopend">End, seconds into the sample</label>
+  <input type="number" id="chopend" value="4" min="0" step="0.1">
+  <label for="chopsrc">Cut from</label>
+  <select id="chopsrc"><option value="voice">The voice alone (cleanest notes)</option><option value="mix">The full mix</option></select>
+  <small>One short phrase works best, about 2 to 6 seconds.</small>
+  <div class="row"><button class="act primary" id="chopgo">Chop and read notes</button></div>
+  <div class="msg" id="chopmsg"></div>
+  <div id="chopout" hidden>
+    <audio id="chopaudio" controls preload="none" style="width:100%;margin-top:10px"></audio>
+    <p id="chopinfo" style="margin:8px 0 0;font-size:0.9rem"></p>
+    <div class="row">
+      <a class="act primary" id="chopstrudel" target="_blank" rel="noopener">Open in Strudel</a>
+      <button class="act" id="chopcopy">Copy code</button>
+      <a class="act" id="chopdl" download="chop.mp3">Download slice</a>
+    </div>
+  </div>
+</div>
 <audio id="player" preload="none"></audio>
 <script>
 const player = document.getElementById("player");
@@ -179,6 +205,8 @@ let stage = 1;
 let data1 = [], data2 = { sets: [], pending: [] };
 let project = "";
 let projects = [];
+let chopTarget = null;
+let chopCode = "";
 try { project = localStorage.getItem("sbProject") || ""; } catch (err) {}
 const linked = new URLSearchParams(location.search).get("project");
 if (linked) { project = linked; try { localStorage.setItem("sbProject", project); } catch (err) {} }
@@ -198,6 +226,7 @@ function padsHtml(b, sendable) {
         ${bar("Voice", s.sounds_like_voice_pct)}
         ${bar("Both", s.both_recognizable_pct, "both")}
         <button class="cmt" data-title="Sample ${esc(s.sample)}, ${esc(s.label)}" data-notes="${esc(s.notes)}">Comments</button>
+        <button class="cmt chopbtn" data-key="${esc(b.key)}" data-run="${s.run}" data-title="Sample ${esc(s.sample)}, ${esc(s.label)}">Chop into notes</button>
         <a class="send" href="${esc(s.audio)}" download="${esc((b.song_two + " over " + b.song_one + " " + b.time + " " + s.sample).replace(/[^A-Za-z0-9 ]+/g, "").trim().replace(/ +/g, "-"))}.mp3">Download</a>
         <div class="stars" role="group" aria-label="Rate sample ${esc(s.sample)}">
           ${[1,2,3,4,5].map(n => `<button data-key="${esc(b.key)}" data-run="${s.run}" data-stars="${n}" class="${n <= (s.rating || 0) ? "on" : ""}" aria-label="${n} star${n > 1 ? "s" : ""}">\u2605</button>`).join("")}
@@ -272,6 +301,15 @@ document.addEventListener("click", async e => {
     player.play().catch(() => { pad.querySelector(".state").textContent = "This sample could not be loaded."; });
     return;
   }
+  const chopb = e.target.closest(".chopbtn");
+  if (chopb) {
+    chopTarget = { key: chopb.dataset.key, run: +chopb.dataset.run };
+    document.getElementById("chopwhat").textContent = chopb.dataset.title;
+    document.getElementById("chopmsg").textContent = "";
+    document.getElementById("chopout").hidden = true;
+    document.getElementById("choppanel").hidden = false;
+    return;
+  }
   const cmt = e.target.closest(".cmt");
   if (cmt) {
     document.getElementById("sheettitle").textContent = cmt.dataset.title;
@@ -313,7 +351,7 @@ document.addEventListener("click", async e => {
     } catch (err) { star.parentElement.insertAdjacentHTML("afterend", '<div class="notes">Rating not saved. Check the connection and tap again.</div>'); }
   }
 });
-document.addEventListener("keydown", e => { if (e.key === "Escape") ["sheet", "projpanel", "exppanel"].forEach(id => document.getElementById(id).hidden = true); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") ["sheet", "projpanel", "exppanel", "choppanel"].forEach(id => document.getElementById(id).hidden = true); });
 player.addEventListener("playing", () => current && (current.querySelector(".state").textContent = "Playing, tap the letter to pause"));
 player.addEventListener("pause", () => current && (current.querySelector(".state").textContent = "Paused"));
 player.addEventListener("ended", () => { if (current) { current.classList.remove("playing"); current.querySelector(".state").textContent = "Finished"; } });
@@ -404,6 +442,32 @@ document.getElementById("expgo").addEventListener("click", async () => {
     stage = 1;
     await loadAll();
   } catch (err) { msg.textContent = "Upload did not finish. Check the connection and try again."; go.disabled = false; }
+});
+document.getElementById("chopgo").addEventListener("click", async () => {
+  const go = document.getElementById("chopgo");
+  const msg = document.getElementById("chopmsg");
+  if (!chopTarget) return;
+  go.disabled = true;
+  msg.textContent = "Cutting and reading notes, about 20 to 40 seconds";
+  try {
+    const r = await fetch("/api/chop", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ key: chopTarget.key, run: chopTarget.run, source: document.getElementById("chopsrc").value,
+        start: +document.getElementById("chopstart").value, end: +document.getElementById("chopend").value }) });
+    const d = await r.json();
+    go.disabled = false;
+    if (!r.ok) { msg.textContent = d.detail || "Chop failed."; return; }
+    msg.textContent = "";
+    chopCode = d.code;
+    document.getElementById("chopaudio").src = "/files/" + d.folder + "/slice.mp3";
+    document.getElementById("chopdl").href = "/files/" + d.folder + "/slice.mp3";
+    document.getElementById("chopstrudel").href = d.strudel;
+    document.getElementById("chopinfo").textContent = d.notes.length + " notes found in " + d.seconds + " seconds, centered on " + d.base_note.toUpperCase() + ". Strudel plays them on the voice itself and on piano.";
+    document.getElementById("chopout").hidden = false;
+  } catch (err) { go.disabled = false; msg.textContent = "Could not reach the server. Try again."; }
+});
+document.getElementById("chopcopy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(chopCode); document.getElementById("chopcopy").textContent = "Copied"; }
+  catch (err) { document.getElementById("chopmsg").textContent = "Copy was blocked; use Open in Strudel instead."; }
 });
 loadAll();
 setInterval(async () => {
