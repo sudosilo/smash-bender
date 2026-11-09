@@ -10,13 +10,14 @@ import stage2
 import runner
 import re
 import requests
+import subprocess
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 r = redis.Redis(decode_responses=True)
 q = Queue("smash-bender", connection=redis.Redis())
 TOKEN = os.environ.get("SB_TOKEN", "")
-FILES = {"mix.mp3", "bent_vocal.wav", "bent_vocal.mp3", "sung_vocal.mp3"}
+FILES = {"mix.mp3", "bent_vocal.wav", "bent_vocal.mp3", "sung_vocal.mp3", "slice.mp3"}
 
 
 def check(req):
@@ -344,3 +345,35 @@ async def import_project(project: str = Form(...), song_one: str = Form(""), son
     job = queue_experiment(slug, music, voice, seconds, song_one, song_two, source[:40], music_start, voice_start)
     return {"project": slug, "job": job,
             "open": "https://smash-bender.167-233-137-169.sslip.io/?project=" + slug}
+
+
+PUBLIC = "https://smash-bender.167-233-137-169.sslip.io"
+
+
+@app.post("/api/chop")
+def chop(body: dict):
+    """Cut a slice out of any sample, read its notes with Basic Pitch, and hand back Strudel code."""
+    try:
+        start, end = float(body.get("start", 0)), float(body.get("end", 0))
+        parent = stage2.find_parent(body.get("key", ""), int(body.get("run", 0)))
+    except (ValueError, RuntimeError):
+        raise HTTPException(404, "that sample was not found")
+    if end - start < 0.3 or end - start > 30:
+        raise HTTPException(400, "pick a slice between 0.3 and 30 seconds long")
+    if body.get("source") == "mix":
+        src = os.path.join(pipeline.DATA, "jobs", parent.get("audio", "").split("/")[2], "mix.mp3")
+    else:
+        src = parent.get("voice_path", "")
+    if not os.path.exists(src):
+        raise HTTPException(404, "the audio for that sample is missing on the server")
+    folder = "chop" + uuid.uuid4().hex[:10]
+    out = os.path.join(pipeline.DATA, "jobs", folder)
+    res = subprocess.run([os.path.join(os.path.dirname(pipeline.DATA), "bp", "bin", "python"),
+                          os.path.join(HERE, "chop.py"), src, str(start), str(end), out,
+                          PUBLIC + "/files/" + folder], capture_output=True, text=True, timeout=300)
+    if res.returncode != 0:
+        tail = [l for l in res.stderr.strip().splitlines() if "WARNING" not in l and "tensorflow" not in l][-1:] or ["failed"]
+        raise HTTPException(500, "chop failed: " + tail[0][:200])
+    data = json.load(open(os.path.join(out, "chop.json")))
+    data["folder"] = folder
+    return data
