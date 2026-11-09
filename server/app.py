@@ -11,6 +11,7 @@ import runner
 import re
 import requests
 import subprocess
+import base64
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -377,3 +378,67 @@ def chop(body: dict):
     data = json.load(open(os.path.join(out, "chop.json")))
     data["folder"] = folder
     return data
+
+
+SAMPLES_REPO = os.environ.get("SB_SAMPLES_REPO", "sudosilo/strudel-samples")
+
+
+def gh(method, path, **kw):
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        raise HTTPException(500, "no GitHub token on the server yet")
+    return requests.request(method, "https://api.github.com/repos/%s/contents/%s" % (SAMPLES_REPO, path),
+                            headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json"},
+                            timeout=60, **kw)
+
+
+@app.post("/api/publish")
+async def publish(name: str = Form(...), folder: str = Form(""), file: UploadFile = File(None)):
+    """Put a sound clip in the Strudel sample repo on GitHub, so Strudel can load it by name."""
+    clean = re.sub(r"[^a-z0-9_]", "", name.lower().replace(" ", "_"))[:40]
+    if not clean:
+        raise HTTPException(400, "give the clip a name with letters, numbers or underscores")
+    base_note = ""
+    if file is not None:
+        data = await file.read()
+        ext = re.sub(r"[^a-z0-9]", "", os.path.splitext(file.filename or "")[1].lower())[:4] or "mp3"
+        if ext not in ("mp3", "wav", "ogg", "m4a", "flac"):
+            raise HTTPException(400, "send an mp3, wav, ogg, m4a or flac file")
+    else:
+        d = os.path.join(pipeline.DATA, "jobs", folder)
+        if not folder.isalnum() or not os.path.exists(os.path.join(d, "slice.mp3")):
+            raise HTTPException(404, "that chop was not found")
+        data = open(os.path.join(d, "slice.mp3"), "rb").read()
+        ext = "mp3"
+        try:
+            base_note = json.load(open(os.path.join(d, "chop.json"))).get("base_note", "")
+        except (OSError, ValueError):
+            pass
+    if len(data) < 500 or len(data) > 20 * 1024 * 1024:
+        raise HTTPException(400, "the clip is empty or bigger than 20 MB")
+    path = "clips/%s.%s" % (clean, ext)
+    old = gh("GET", path)
+    body = {"message": "Add clip " + clean, "content": base64.b64encode(data).decode()}
+    if old.status_code == 200:
+        body["sha"] = old.json().get("sha")
+    res = gh("PUT", path, json=body)
+    if res.status_code not in (200, 201):
+        raise HTTPException(502, "GitHub refused the clip: %s" % res.text[:150])
+    for attempt in range(3):
+        cur = gh("GET", "strudel.json")
+        if cur.status_code != 200:
+            raise HTTPException(502, "could not read strudel.json on GitHub")
+        info = cur.json()
+        smap = json.loads(base64.b64decode(info["content"]).decode() or "{}")
+        smap[clean] = {base_note: path} if base_note else [path]
+        upd = gh("PUT", "strudel.json", json={
+            "message": "Map clip " + clean, "sha": info["sha"],
+            "content": base64.b64encode((json.dumps(smap, indent=2) + "\n").encode()).decode()})
+        if upd.status_code in (200, 201):
+            break
+    else:
+        raise HTTPException(502, "could not update strudel.json on GitHub")
+    snippet = "samples('github:%s')\n" % SAMPLES_REPO + (
+        'note("%s").s("%s").clip(1)' % (base_note or "c3", clean) if base_note else 's("%s")' % clean)
+    return {"name": clean, "path": path, "strudel_code": snippet,
+            "strudel": "https://strudel.cc/#" + requests.utils.quote(base64.b64encode(snippet.encode()).decode())}
