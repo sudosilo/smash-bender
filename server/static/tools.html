@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<title>Toolbox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root { --bg: #e9eef2; --panel: #ffffff; --ink: #14202b; --muted: #586573; --line: #cdd6de; --cobalt: #1f5fd6; --good: #1d8457; --warm: #b8480f;
+  --head: "Bricolage Grotesque", "Arial Narrow", Arial, sans-serif; --body: "Atkinson Hyperlegible", Verdana, Arial, sans-serif; }
+* { box-sizing: border-box; }
+html { background: var(--bg); color: var(--ink); font: 16px/1.5 var(--body);
+  padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+body { margin: 0; }
+main { max-width: 760px; margin: 0 auto; padding: 20px 16px 48px; }
+h1 { font: 800 clamp(2.2rem, 9vw, 3.4rem)/0.95 var(--head); letter-spacing: -0.02em; margin: 8px 0 6px; }
+p.lead { margin: 0; color: var(--muted); max-width: 60ch; }
+a.back { display: inline-block; margin-top: 14px; font-weight: 700; color: var(--cobalt); }
+.count { margin-top: 14px; font-weight: 700; }
+h2 { font: 800 1.3rem/1.2 var(--head); margin: 28px 0 10px; }
+.tool { background: var(--panel); border: 1px solid var(--line); border-left: 6px solid var(--good); border-radius: 12px; padding: 12px 14px; margin-top: 10px; }
+.tool.off { border-left-color: var(--warm); }
+.tool h3 { font: 800 1.1rem/1.2 var(--head); margin: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.tag { font: 700 0.75rem/1 var(--body); padding: 3px 8px; border-radius: 999px; background: #e3f3ea; color: var(--good); }
+.tool.off .tag { background: #fbe9dd; color: var(--warm); }
+.tool p { margin: 6px 0 0; }
+.tool small { display: block; margin-top: 6px; color: var(--muted); font-size: 0.85rem; }
+.err { margin-top: 24px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Toolbox</h1>
+  <p class="lead">Every tool on the server, what it does in plain words, whether it is ready, and which button uses it.</p>
+  <a class="back" href="/">Back to the sample log</a>
+  <div class="count" id="count"></div>
+  <div id="list"></div>
+</main>
+<script>
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+fetch("/api/tools").then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(tools => {
+  const ready = tools.filter(t => t.ready).length;
+  document.getElementById("count").textContent = ready + " of " + tools.length + " tools ready";
+  const groups = [];
+  tools.forEach(t => { if (!groups.includes(t.group)) groups.push(t.group); });
+  document.getElementById("list").innerHTML = groups.map(g => "<h2>" + esc(g) + "</h2>" + tools.filter(t => t.group === g).map(t =>
+    '<div class="tool ' + (t.ready ? "" : "off") + '"><h3>' + esc(t.name) + ' <span class="tag">' + (t.ready ? "Ready" : "Not ready") + '</span></h3>' +
+    "<p>" + esc(t.what) + "</p><small>Used by: " + esc(t.used_by) + (t.note ? ". " + esc(t.note) + "." : "") + "</small></div>").join("")).join("");
+}).catch(() => { document.getElementById("list").innerHTML = '<p class="err">The tool list did not load. Reload the page; if it keeps failing, the server is restarting or down.</p>'; });
+</script>
+</body>
+</html>
